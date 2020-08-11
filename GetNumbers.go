@@ -10,12 +10,6 @@ type GetNumbers struct {
 	client *Onlinesim
 }
 
-func (c *Onlinesim) GetNumbers() *GetNumbers {
-	return &GetNumbers{
-		client: c,
-	}
-}
-
 type PriceResponse struct {
 	Response string `json:"response"`
 	Price    int    `json:"price"`

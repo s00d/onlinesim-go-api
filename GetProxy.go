@@ -7,45 +7,39 @@ import (
 )
 
 type GetProxy struct {
-	client    *Onlinesim
-}
-
-func (c *Onlinesim) GetProxy() *GetProxy {
-	return &GetProxy{
-		client:    c,
-	}
+	client *Onlinesim
 }
 
 type ProxyResponse struct {
 	Response string `json:"response"`
-	Item     Proxy `json:"item"`
+	Item     Proxy  `json:"item"`
 }
 
 type Proxy struct {
-	Type           string `json:"type"`
-	ConnectType    string `json:"connect_type"`
-	Host           string `json:"host"`
-	Port           int    `json:"port"`
-	User           string `json:"user"`
-	Pass           string `json:"pass"`
-	Operator       string `json:"operator"`
-	Rent           interface{}    `json:"rent"`
-	GeneralTraffic int    `json:"general_traffic"`
-	Traffic        int    `json:"traffic"`
-	Country        string `json:"country"`
-	City           string `json:"city"`
-	Session        bool   `json:"session"`
-	PortCount      int    `json:"port_count"`
-	Rotate         interface{}    `json:"rotate"`
-	StopAt         string `json:"stop_at"`
-	UpdatedAt      string `json:"updated_at"`
-	CreatedAt      string `json:"created_at"`
-	Tzid           int    `json:"tzid"`
-	Time           int    `json:"time"`
-	Days           int    `json:"days"`
-	Hours          int    `json:"hours"`
-	ChangeIP       bool   `json:"change_ip"`
-	ChangeType     bool   `json:"change_type"`
+	Type           string      `json:"type"`
+	ConnectType    string      `json:"connect_type"`
+	Host           string      `json:"host"`
+	Port           int         `json:"port"`
+	User           string      `json:"user"`
+	Pass           string      `json:"pass"`
+	Operator       string      `json:"operator"`
+	Rent           interface{} `json:"rent"`
+	GeneralTraffic int         `json:"general_traffic"`
+	Traffic        int         `json:"traffic"`
+	Country        string      `json:"country"`
+	City           string      `json:"city"`
+	Session        bool        `json:"session"`
+	PortCount      int         `json:"port_count"`
+	Rotate         interface{} `json:"rotate"`
+	StopAt         string      `json:"stop_at"`
+	UpdatedAt      string      `json:"updated_at"`
+	CreatedAt      string      `json:"created_at"`
+	Tzid           int         `json:"tzid"`
+	Time           int         `json:"time"`
+	Days           int         `json:"days"`
+	Hours          int         `json:"hours"`
+	ChangeIP       bool        `json:"change_ip"`
+	ChangeType     bool        `json:"change_type"`
 }
 
 func (c *GetProxy) getDays(proxy_type string) (error, Proxy) {
@@ -88,7 +82,7 @@ func (c *GetProxy) getTraffic(traffic string) (error, Proxy) {
 
 type ProxyStateResponse struct {
 	Response interface{} `json:"response"`
-	List     []Proxy `json:"list"`
+	List     []Proxy     `json:"list"`
 }
 
 func (c *GetProxy) state(orderby string) (error, []Proxy) {
@@ -132,7 +126,7 @@ func (c *GetProxy) changeIp(tzid int) (error, bool) {
 	m["tzid"] = strconv.Itoa(tzid)
 	result := c.client.get("proxy/changeIp", m)
 
-	err :=c.client.checkEmptyResponse(result)
+	err := c.client.checkEmptyResponse(result)
 	if err != nil {
 		return fmt.Errorf("%w", err), false
 	}
@@ -141,8 +135,8 @@ func (c *GetProxy) changeIp(tzid int) (error, bool) {
 }
 
 type ChangeTypeResponse struct {
-	Response 		interface{} `json:"response"`
-	ConnectType     string `json:"connect_type"`
+	Response    interface{} `json:"response"`
+	ConnectType string      `json:"connect_type"`
 }
 
 func (c *GetProxy) changeType(tzid int) (error, string) {
@@ -170,7 +164,7 @@ func (c *GetProxy) setComment(tzid int, comment string) (error, bool) {
 	m["comment"] = comment
 	result := c.client.get("proxy/setComment", m)
 
-	err :=c.client.checkEmptyResponse(result)
+	err := c.client.checkEmptyResponse(result)
 	if err != nil {
 		return fmt.Errorf("%w", err), false
 	}

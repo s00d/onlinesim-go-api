@@ -100,22 +100,32 @@ func (at *Onlinesim) checkEmptyResponse(resp []byte) error {
 	return nil
 }
 
-func (at *Onlinesim) rent() *GetRent {
-	return at.GetRent()
+func (c *Onlinesim) free() *GetFree {
+	return &GetFree{
+		client: c,
+	}
 }
 
-func (at *Onlinesim) numbers() *GetNumbers {
-	return at.GetNumbers()
+func (c *Onlinesim) numbers() *GetNumbers {
+	return &GetNumbers{
+		client: c,
+	}
 }
 
-func (at *Onlinesim) proxy() *GetProxy {
-	return at.GetProxy()
+func (c *Onlinesim) proxy() *GetProxy {
+	return &GetProxy{
+		client: c,
+	}
 }
 
-func (at *Onlinesim) user() *GetUser {
-	return at.GetUser()
+func (c *Onlinesim) rent() *GetRent {
+	return &GetRent{
+		client: c,
+	}
 }
 
-func (at *Onlinesim) free() *GetFree {
-	return at.GetFree()
+func (c *Onlinesim) user() *GetUser {
+	return &GetUser{
+		client: c,
+	}
 }

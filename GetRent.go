@@ -7,14 +7,7 @@ import (
 )
 
 type GetRent struct {
-	client    *Onlinesim
-}
-
-
-func (c *Onlinesim) GetRent() *GetRent {
-	return &GetRent{
-		client:    c,
-	}
+	client *Onlinesim
 }
 
 type Rent struct {
@@ -43,7 +36,7 @@ type Rent struct {
 
 type GetRentResponse struct {
 	Response interface{} `json:"response"`
-	Item     Rent `json:"item"`
+	Item     Rent        `json:"item"`
 }
 
 func (c *GetRent) get(country int, days int, extension bool) (error, Rent) {
@@ -69,7 +62,7 @@ func (c *GetRent) get(country int, days int, extension bool) (error, Rent) {
 
 type StateRentResponse struct {
 	Response interface{} `json:"response"`
-	List     []Rent `json:"list"`
+	List     []Rent      `json:"list"`
 }
 
 func (c *GetRent) state() (error, []Rent) {
@@ -133,7 +126,7 @@ func (c *GetRent) portReload(tzid int) (error, bool) {
 	m["tzid"] = strconv.Itoa(tzid)
 	result := c.client.get("rent/portReload", m)
 
-	err :=c.client.checkEmptyResponse(result)
+	err := c.client.checkEmptyResponse(result)
 	if err != nil {
 		return fmt.Errorf("%w", err), false
 	}
@@ -141,21 +134,21 @@ func (c *GetRent) portReload(tzid int) (error, bool) {
 }
 
 type TariffsRent struct {
-	Code     int    `json:"code"`
-	Enabled  bool   `json:"enabled"`
-	Name     string `json:"name"`
-	New      bool   `json:"new"`
-	Position int    `json:"position"`
+	Code     int            `json:"code"`
+	Enabled  bool           `json:"enabled"`
+	Name     string         `json:"name"`
+	New      bool           `json:"new"`
+	Position int            `json:"position"`
 	Count    map[string]int `json:"count"`
-	Days 	 map[string]int `json:"days"`
-	Extend 	 int `json:"extend"`
+	Days     map[string]int `json:"days"`
+	Extend   int            `json:"extend"`
 }
 
 func (c *GetRent) tariffs() (error, map[string]TariffsRent) {
 	m := make(map[string]string)
 	result := c.client.get("rent/tariffsRent", m)
 
-	err :=c.client.checkEmptyResponse(result)
+	err := c.client.checkEmptyResponse(result)
 	if err != nil {
 		return fmt.Errorf("%w", err), nil
 	}
@@ -174,7 +167,7 @@ func (c *GetRent) tariffsOne(country int) (error, TariffsRent) {
 	m["country"] = strconv.Itoa(country)
 	result := c.client.get("rent/tariffsRent", m)
 
-	err :=c.client.checkEmptyResponse(result)
+	err := c.client.checkEmptyResponse(result)
 	if err != nil {
 		return fmt.Errorf("%w", err), TariffsRent{}
 	}
@@ -193,7 +186,7 @@ func (c *GetRent) close(tzid int) (error, bool) {
 	m["tzid"] = strconv.Itoa(tzid)
 	result := c.client.get("rent/closeRentNum", m)
 
-	err :=c.client.checkEmptyResponse(result)
+	err := c.client.checkEmptyResponse(result)
 	if err != nil {
 		return fmt.Errorf("%w", err), false
 	}

@@ -6,9 +6,8 @@ import (
 	"strconv"
 )
 
-
 type CountriesResponse struct {
-	Response  string `json:"response"`
+	Response  string    `json:"response"`
 	Countries []Country `json:"countries"`
 }
 
@@ -17,9 +16,8 @@ type Country struct {
 	CountryText string `json:"country_text"`
 }
 
-
 type NumbersResponse struct {
-	Response string `json:"response"`
+	Response string   `json:"response"`
 	Numbers  []Number `json:"numbers"`
 }
 
@@ -33,12 +31,10 @@ type Number struct {
 	CountryText string `json:"country_text"`
 }
 
-
 type MessagesResponse struct {
-	Response string `json:"response"`
+	Response string    `json:"response"`
 	Numbers  []Message `json:"numbers"`
 }
-
 
 type Message struct {
 	Maxdate     string `json:"maxdate"`
@@ -51,13 +47,7 @@ type Message struct {
 }
 
 type GetFree struct {
-	client    *Onlinesim
-}
-
-func (c *Onlinesim) GetFree() *GetFree {
-	return &GetFree{
-		client:    c,
-	}
+	client *Onlinesim
 }
 
 func (c *GetFree) countries() (error, []Country) {
@@ -96,6 +86,7 @@ func (c *GetFree) numbers(country int) (error, []Number) {
 
 	return nil, response.Numbers
 }
+
 //
 func (c *GetFree) messages(phone, page int) (error, []Message) {
 	if page == 0 {
