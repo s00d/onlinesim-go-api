@@ -8,22 +8,21 @@ import (
 )
 
 const (
-	baseURL = "https://onlinesim.ru/api"
-	rateLimit       = 2
+	baseURL   = "https://onlinesim.ru/api"
+	rateLimit = 2
 )
 
 type Onlinesim struct {
 	rateLimiter <-chan time.Time
 	baseURL     string
 	apiKey      string
-	lang      	string
+	lang        string
 	dev_id      string
 }
 
 type Default struct {
 	Response interface{} `json:"response"`
 }
-
 
 func NewClient(apiKey string, lang string, dev_id string) *Onlinesim {
 	if lang == "" {
@@ -34,8 +33,8 @@ func NewClient(apiKey string, lang string, dev_id string) *Onlinesim {
 		rateLimiter: time.Tick(time.Second / time.Duration(rateLimit)),
 		apiKey:      apiKey,
 		baseURL:     baseURL,
-		lang:       lang,
-		dev_id:     dev_id,
+		lang:        lang,
+		dev_id:      dev_id,
 	}
 }
 
@@ -57,11 +56,11 @@ func (at *Onlinesim) get(method string, params map[string]string) []byte {
 
 	url := fmt.Sprintf("%s/%s.php", at.baseURL, method)
 
-	httpclient.Defaults(httpclient.Map {
-		httpclient.OPT_USERAGENT: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36",
-		"Accept-Language": "en-us",
-		httpclient.OPT_PROXY: "127.0.0.1:4034",
-		httpclient.OPT_PROXYTYPE: httpclient.PROXY_HTTP,
+	httpclient.Defaults(httpclient.Map{
+		httpclient.OPT_USERAGENT:  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36",
+		"Accept-Language":         "en-us",
+		httpclient.OPT_PROXY:      "127.0.0.1:4034",
+		httpclient.OPT_PROXYTYPE:  httpclient.PROXY_HTTP,
 		httpclient.OPT_UNSAFE_TLS: true,
 	})
 
@@ -79,7 +78,7 @@ func (at *Onlinesim) get(method string, params map[string]string) []byte {
 
 func (at *Onlinesim) checkResponse(resp interface{}) error {
 	if fmt.Sprintf("%v", resp) != "1" {
-		return fmt.Errorf("%s",resp)
+		return fmt.Errorf("%s", resp)
 	}
 	return nil
 }
@@ -95,8 +94,28 @@ func (at *Onlinesim) checkEmptyResponse(resp []byte) error {
 			return nil
 		}
 		if fmt.Sprintf("%v", __default.Response) != "1" {
-			return fmt.Errorf("%s",__default.Response)
+			return fmt.Errorf("%s", __default.Response)
 		}
 	}
 	return nil
+}
+
+func (at *Onlinesim) rent() *GetRent {
+	return at.GetRent()
+}
+
+func (at *Onlinesim) numbers() *GetNumbers {
+	return at.GetNumbers()
+}
+
+func (at *Onlinesim) proxy() *GetProxy {
+	return at.GetProxy()
+}
+
+func (at *Onlinesim) user() *GetUser {
+	return at.GetUser()
+}
+
+func (at *Onlinesim) free() *GetFree {
+	return at.GetFree()
 }

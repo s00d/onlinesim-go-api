@@ -18,7 +18,7 @@ import (
 )
 
 func main() {
-    client := NewClient("f323234d3453a784df1ad64c87f2db04", "en", "")
+    client := NewClient("", "en", "")
     
     error, data := client.GetNumber().get("vkcom", 7)
     if error != nil {
