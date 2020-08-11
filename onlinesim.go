@@ -100,6 +100,12 @@ func (at *Onlinesim) checkEmptyResponse(resp []byte) error {
 	return nil
 }
 
+func (c *Onlinesim) Free() *GetFree {
+	return &GetFree{
+		client: c,
+	}
+}
+
 func (c *Onlinesim) Numbers() *GetNumbers {
 	return &GetNumbers{
 		client: c,
