@@ -17,8 +17,8 @@ type Country struct {
 }
 
 type NumbersResponse struct {
-	Response string   `json:"response"`
-	Numbers  []Number `json:"numbers"`
+	Response interface{} `json:"response"`
+	Numbers  []Number    `json:"numbers"`
 }
 
 type Number struct {
@@ -32,8 +32,8 @@ type Number struct {
 }
 
 type MessagesResponse struct {
-	Response string    `json:"response"`
-	Numbers  []Message `json:"numbers"`
+	Response interface{} `json:"response"`
+	Numbers  []Message   `json:"numbers"`
 }
 
 type Message struct {

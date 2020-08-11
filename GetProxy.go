@@ -11,8 +11,8 @@ type GetProxy struct {
 }
 
 type ProxyResponse struct {
-	Response string `json:"response"`
-	Item     Proxy  `json:"item"`
+	Response interface{} `json:"response"`
+	Item     Proxy       `json:"item"`
 }
 
 type Proxy struct {

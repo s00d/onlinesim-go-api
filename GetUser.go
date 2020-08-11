@@ -35,8 +35,8 @@ func (c *GetUser) Balance() (error, BalanceResponse) {
 }
 
 type ProfileResponse struct {
-	Response string  `json:"response"`
-	Profile  Profile `json:"profile"`
+	Response interface{} `json:"response"`
+	Profile  Profile     `json:"profile"`
 }
 
 type Profile struct {

@@ -57,10 +57,10 @@ func (at *Onlinesim) get(method string, params map[string]string) []byte {
 	url := fmt.Sprintf("%s/%s.php", at.baseURL, method)
 
 	httpclient.Defaults(httpclient.Map{
-		httpclient.OPT_USERAGENT:  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36",
-		"Accept-Language":         "en-us",
-		httpclient.OPT_PROXY:      "127.0.0.1:4034",
-		httpclient.OPT_PROXYTYPE:  httpclient.PROXY_HTTP,
+		httpclient.OPT_USERAGENT: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36",
+		"Accept-Language":        "en-us",
+		//httpclient.OPT_PROXY:      "127.0.0.1:4034",
+		//httpclient.OPT_PROXYTYPE:  httpclient.PROXY_HTTP,
 		httpclient.OPT_UNSAFE_TLS: true,
 	})
 

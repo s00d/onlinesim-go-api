@@ -11,8 +11,8 @@ type GetNumbers struct {
 }
 
 type PriceResponse struct {
-	Response string `json:"response"`
-	Price    int    `json:"price"`
+	Response interface{} `json:"response"`
+	Price    int         `json:"price"`
 }
 
 func (c *GetNumbers) Price(country int, service string) (error, int) {
@@ -35,8 +35,8 @@ func (c *GetNumbers) Price(country int, service string) (error, int) {
 }
 
 type GetResponse struct {
-	Response string `json:"response"`
-	Tzid     int    `json:"tzid"`
+	Response interface{} `json:"response"`
+	Tzid     int         `json:"tzid"`
 }
 
 func (c *GetNumbers) Get(service string, country int) (error, int) {
@@ -76,10 +76,10 @@ type State struct {
 		Service string `json:"service"`
 		Msg     string `json:"msg"`
 	} `json:"msg,omitempty"`
-	Service  string `json:"service"`
-	Country  int    `json:"country"`
-	Response string `json:"response"`
-	Sum      int    `json:"sum,omitempty"`
+	Service  string      `json:"service"`
+	Country  int         `json:"country"`
+	Response interface{} `json:"response"`
+	Sum      int         `json:"sum,omitempty"`
 }
 
 func (c *GetNumbers) State(message_to_code int, orderby Order) (error, StateResponse) {
@@ -222,8 +222,8 @@ func (c *GetNumbers) TariffsOne(country int) (error, TariffsResponse) {
 }
 
 type ServiceResponse struct {
-	Service  []string `json:"service"`
-	Response string   `json:"response"`
+	Service  []string    `json:"service"`
+	Response interface{} `json:"response"`
 }
 
 func (c *GetNumbers) Service() (error, []string) {
@@ -245,8 +245,8 @@ func (c *GetNumbers) Service() (error, []string) {
 }
 
 type ServiceNumberResponse struct {
-	Number   []string `json:"number"`
-	Response string   `json:"response"`
+	Number   []string    `json:"number"`
+	Response interface{} `json:"response"`
 }
 
 func (c *GetNumbers) ServiceNumber(service string) (error, []string) {
