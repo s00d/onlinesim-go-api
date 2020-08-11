@@ -7,8 +7,8 @@ import (
 )
 
 type CountriesResponse struct {
-	Response  string    `json:"response"`
-	Countries []Country `json:"countries"`
+	Response  interface{} `json:"response"`
+	Countries []Country   `json:"countries"`
 }
 
 type Country struct {
