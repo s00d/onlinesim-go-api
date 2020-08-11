@@ -18,7 +18,7 @@ import (
 )
 
 func main() {
-    client := NewClient("", "en", "").Numbers()
+    client := onlinesim.NewClient("", "en", "").Numbers()
     
     error, data := client.Get("vkcom", 7)
     if error != nil {
