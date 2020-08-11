@@ -7,13 +7,12 @@ import (
 )
 
 type GetNumbers struct {
-	client    *Onlinesim
+	client *Onlinesim
 }
-
 
 func (c *Onlinesim) GetNumbers() *GetNumbers {
 	return &GetNumbers{
-		client:    c,
+		client: c,
 	}
 }
 
@@ -22,9 +21,10 @@ type PriceResponse struct {
 	Price    int    `json:"price"`
 }
 
-func (c *GetNumbers) price(service string) (error, int) {
+func (c *GetNumbers) price(country int, service string) (error, int) {
 	m := make(map[string]string)
 	m["service"] = service
+	m["country"] = strconv.Itoa(country)
 	result := c.client.get("getPrice", m)
 
 	response := PriceResponse{}
@@ -42,7 +42,7 @@ func (c *GetNumbers) price(service string) (error, int) {
 
 type GetResponse struct {
 	Response string `json:"response"`
-	Tzid     int `json:"tzid"`
+	Tzid     int    `json:"tzid"`
 }
 
 func (c *GetNumbers) get(service string, country int) (error, int) {
@@ -65,11 +65,11 @@ func (c *GetNumbers) get(service string, country int) (error, int) {
 }
 
 type Order string
+
 const (
-	ASC Order = "ASC"
+	ASC  Order = "ASC"
 	DESC Order = "DESC"
 )
-
 
 type StateResponse []State
 
@@ -97,7 +97,7 @@ func (c *GetNumbers) state(message_to_code int, orderby Order) (error, StateResp
 	m["type"] = "index"
 	result := c.client.get("getState", m)
 
-	err :=c.client.checkEmptyResponse(result)
+	err := c.client.checkEmptyResponse(result)
 	if err != nil {
 		return fmt.Errorf("%w", err), nil
 	}
@@ -120,7 +120,7 @@ func (c *GetNumbers) stateOne(tzid int, message_to_code int) (error, State) {
 	m["type"] = "index"
 	result := c.client.get("getState", m)
 
-	err :=c.client.checkEmptyResponse(result)
+	err := c.client.checkEmptyResponse(result)
 	if err != nil {
 		return fmt.Errorf("%w", err), State{}
 	}
@@ -171,22 +171,22 @@ func (c *GetNumbers) close(tzid int) (error, bool) {
 }
 
 type TariffsResponse struct {
-	Name     string `json:"name"`
-	Position int    `json:"position"`
-	Code     int    `json:"code"`
-	Other    interface{}    `json:"other"`
-	New      bool   `json:"new"`
-	Enabled  bool   `json:"enabled"`
+	Name     string             `json:"name"`
+	Position int                `json:"position"`
+	Code     int                `json:"code"`
+	Other    interface{}        `json:"other"`
+	New      bool               `json:"new"`
+	Enabled  bool               `json:"enabled"`
 	Services map[string]Service `json:"services"`
 }
 
 type Service struct {
-	Count   interface{}    `json:"count"`
-	Popular bool   `json:"popular"`
-	Code    int    `json:"code"`
-	Price   int    `json:"price"`
-	ID      int    `json:"id"`
-	Service string `json:"service"`
+	Count   interface{} `json:"count"`
+	Popular bool        `json:"popular"`
+	Code    int         `json:"code"`
+	Price   int         `json:"price"`
+	ID      int         `json:"id"`
+	Service string      `json:"service"`
 	Slug    interface{} `json:"slug"`
 }
 
@@ -194,7 +194,7 @@ func (c *GetNumbers) tariffs() (error, map[string]TariffsResponse) {
 	m := make(map[string]string)
 	m["country"] = "all"
 	result := c.client.get("getNumbersStats", m)
-	err :=c.client.checkEmptyResponse(result)
+	err := c.client.checkEmptyResponse(result)
 	if err != nil {
 		return fmt.Errorf("%w", err), map[string]TariffsResponse{}
 	}
@@ -213,7 +213,7 @@ func (c *GetNumbers) tariffsOne(country int) (error, TariffsResponse) {
 	m["country"] = strconv.Itoa(country)
 	result := c.client.get("getNumbersStats", m)
 
-	err :=c.client.checkEmptyResponse(result)
+	err := c.client.checkEmptyResponse(result)
 	if err != nil {
 		return fmt.Errorf("%w", err), TariffsResponse{}
 	}
@@ -251,7 +251,7 @@ func (c *GetNumbers) service() (error, []string) {
 }
 
 type ServiceNumberResponse struct {
-	Number  []string `json:"number"`
+	Number   []string `json:"number"`
 	Response string   `json:"response"`
 }
 
