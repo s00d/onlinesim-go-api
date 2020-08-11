@@ -39,7 +39,7 @@ type GetRentResponse struct {
 	Item     Rent        `json:"item"`
 }
 
-func (c *GetRent) get(country int, days int, extension bool) (error, Rent) {
+func (c *GetRent) Get(country int, days int, extension bool) (error, Rent) {
 	m := make(map[string]string)
 	m["country"] = strconv.Itoa(country)
 	m["days"] = strconv.Itoa(days)
@@ -65,7 +65,7 @@ type StateRentResponse struct {
 	List     []Rent      `json:"list"`
 }
 
-func (c *GetRent) state() (error, []Rent) {
+func (c *GetRent) State() (error, []Rent) {
 	m := make(map[string]string)
 	m["pagination"] = "false"
 	result := c.client.get("rent/getRentState", m)
@@ -83,7 +83,7 @@ func (c *GetRent) state() (error, []Rent) {
 	return nil, response.List
 }
 
-func (c *GetRent) stateOne(tzid int) (error, Rent) {
+func (c *GetRent) StateOne(tzid int) (error, Rent) {
 	m := make(map[string]string)
 	m["tzid"] = strconv.Itoa(tzid)
 	m["pagination"] = "false"
@@ -102,7 +102,7 @@ func (c *GetRent) stateOne(tzid int) (error, Rent) {
 	return nil, response.List[0]
 }
 
-func (c *GetRent) extend(tzid int, days int) (error, Rent) {
+func (c *GetRent) Extend(tzid int, days int) (error, Rent) {
 	m := make(map[string]string)
 	m["tzid"] = strconv.Itoa(tzid)
 	m["days"] = strconv.Itoa(days)
@@ -121,7 +121,7 @@ func (c *GetRent) extend(tzid int, days int) (error, Rent) {
 	return nil, response.Item
 }
 
-func (c *GetRent) portReload(tzid int) (error, bool) {
+func (c *GetRent) PortReload(tzid int) (error, bool) {
 	m := make(map[string]string)
 	m["tzid"] = strconv.Itoa(tzid)
 	result := c.client.get("rent/portReload", m)
@@ -144,7 +144,7 @@ type TariffsRent struct {
 	Extend   int            `json:"extend"`
 }
 
-func (c *GetRent) tariffs() (error, map[string]TariffsRent) {
+func (c *GetRent) Tariffs() (error, map[string]TariffsRent) {
 	m := make(map[string]string)
 	result := c.client.get("rent/tariffsRent", m)
 
@@ -162,7 +162,7 @@ func (c *GetRent) tariffs() (error, map[string]TariffsRent) {
 	return nil, response
 }
 
-func (c *GetRent) tariffsOne(country int) (error, TariffsRent) {
+func (c *GetRent) TariffsOne(country int) (error, TariffsRent) {
 	m := make(map[string]string)
 	m["country"] = strconv.Itoa(country)
 	result := c.client.get("rent/tariffsRent", m)
@@ -181,7 +181,7 @@ func (c *GetRent) tariffsOne(country int) (error, TariffsRent) {
 	return nil, response
 }
 
-func (c *GetRent) close(tzid int) (error, bool) {
+func (c *GetRent) Close(tzid int) (error, bool) {
 	m := make(map[string]string)
 	m["tzid"] = strconv.Itoa(tzid)
 	result := c.client.get("rent/closeRentNum", m)

@@ -18,9 +18,9 @@ import (
 )
 
 func main() {
-    client := NewClient("", "en", "").numbers()
+    client := NewClient("", "en", "").Numbers()
     
-    error, data := client.get("vkcom", 7)
+    error, data := client.Get("vkcom", 7)
     if error != nil {
         panic(error)
     }

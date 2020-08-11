@@ -15,7 +15,7 @@ type PriceResponse struct {
 	Price    int    `json:"price"`
 }
 
-func (c *GetNumbers) price(country int, service string) (error, int) {
+func (c *GetNumbers) Price(country int, service string) (error, int) {
 	m := make(map[string]string)
 	m["service"] = service
 	m["country"] = strconv.Itoa(country)
@@ -39,7 +39,7 @@ type GetResponse struct {
 	Tzid     int    `json:"tzid"`
 }
 
-func (c *GetNumbers) get(service string, country int) (error, int) {
+func (c *GetNumbers) Get(service string, country int) (error, int) {
 	m := make(map[string]string)
 	m["service"] = service
 	m["country"] = strconv.Itoa(country)
@@ -82,7 +82,7 @@ type State struct {
 	Sum      int    `json:"sum,omitempty"`
 }
 
-func (c *GetNumbers) state(message_to_code int, orderby Order) (error, StateResponse) {
+func (c *GetNumbers) State(message_to_code int, orderby Order) (error, StateResponse) {
 	m := make(map[string]string)
 	m["message_to_code"] = strconv.Itoa(message_to_code)
 	m["orderby"] = string(orderby)
@@ -105,7 +105,7 @@ func (c *GetNumbers) state(message_to_code int, orderby Order) (error, StateResp
 	return nil, response
 }
 
-func (c *GetNumbers) stateOne(tzid int, message_to_code int) (error, State) {
+func (c *GetNumbers) StateOne(tzid int, message_to_code int) (error, State) {
 	m := make(map[string]string)
 	m["message_to_code"] = strconv.Itoa(message_to_code)
 	m["tzid"] = strconv.Itoa(tzid)
@@ -128,7 +128,7 @@ func (c *GetNumbers) stateOne(tzid int, message_to_code int) (error, State) {
 	return nil, response[0]
 }
 
-func (c *GetNumbers) next(tzid int) (error, bool) {
+func (c *GetNumbers) Next(tzid int) (error, bool) {
 	m := make(map[string]string)
 	m["tzid"] = strconv.Itoa(tzid)
 	result := c.client.get("setOperationRevise", m)
@@ -146,7 +146,7 @@ func (c *GetNumbers) next(tzid int) (error, bool) {
 	return nil, true
 }
 
-func (c *GetNumbers) close(tzid int) (error, bool) {
+func (c *GetNumbers) Close(tzid int) (error, bool) {
 	m := make(map[string]string)
 	m["tzid"] = strconv.Itoa(tzid)
 	result := c.client.get("setOperationOk", m)
@@ -184,7 +184,7 @@ type Service struct {
 	Slug    interface{} `json:"slug"`
 }
 
-func (c *GetNumbers) tariffs() (error, map[string]TariffsResponse) {
+func (c *GetNumbers) Tariffs() (error, map[string]TariffsResponse) {
 	m := make(map[string]string)
 	m["country"] = "all"
 	result := c.client.get("getNumbersStats", m)
@@ -202,7 +202,7 @@ func (c *GetNumbers) tariffs() (error, map[string]TariffsResponse) {
 	return nil, response
 }
 
-func (c *GetNumbers) tariffsOne(country int) (error, TariffsResponse) {
+func (c *GetNumbers) TariffsOne(country int) (error, TariffsResponse) {
 	m := make(map[string]string)
 	m["country"] = strconv.Itoa(country)
 	result := c.client.get("getNumbersStats", m)
@@ -226,7 +226,7 @@ type ServiceResponse struct {
 	Response string   `json:"response"`
 }
 
-func (c *GetNumbers) service() (error, []string) {
+func (c *GetNumbers) Service() (error, []string) {
 	m := make(map[string]string)
 	result := c.client.get("getService", m)
 
@@ -249,7 +249,7 @@ type ServiceNumberResponse struct {
 	Response string   `json:"response"`
 }
 
-func (c *GetNumbers) serviceNumber(service string) (error, []string) {
+func (c *GetNumbers) ServiceNumber(service string) (error, []string) {
 	m := make(map[string]string)
 	m["service"] = service
 	result := c.client.get("getServiceNumber", m)

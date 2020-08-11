@@ -15,7 +15,7 @@ type BalanceResponse struct {
 	Income   float64 `json:"income"`
 }
 
-func (c *GetUser) balance() (error, BalanceResponse) {
+func (c *GetUser) Balance() (error, BalanceResponse) {
 	m := make(map[string]string)
 	m["income"] = "1"
 	result := c.client.get("getBalance", m)
@@ -60,7 +60,7 @@ type Profile struct {
 	} `json:"payment"`
 }
 
-func (c *GetUser) profile() (error, Profile) {
+func (c *GetUser) Profile() (error, Profile) {
 	m := make(map[string]string)
 	result := c.client.get("getProfile", m)
 

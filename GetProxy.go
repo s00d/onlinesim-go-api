@@ -42,7 +42,7 @@ type Proxy struct {
 	ChangeType     bool        `json:"change_type"`
 }
 
-func (c *GetProxy) getDays(proxy_type string) (error, Proxy) {
+func (c *GetProxy) GetDays(proxy_type string) (error, Proxy) {
 	m := make(map[string]string)
 	m["type"] = proxy_type
 	m["class"] = "days"
@@ -61,7 +61,7 @@ func (c *GetProxy) getDays(proxy_type string) (error, Proxy) {
 	return nil, response.Item
 }
 
-func (c *GetProxy) getTraffic(traffic string) (error, Proxy) {
+func (c *GetProxy) GetTraffic(traffic string) (error, Proxy) {
 	m := make(map[string]string)
 	m["class"] = "traffic"
 	m["count"] = traffic
@@ -85,7 +85,7 @@ type ProxyStateResponse struct {
 	List     []Proxy     `json:"list"`
 }
 
-func (c *GetProxy) state(orderby string) (error, []Proxy) {
+func (c *GetProxy) State(orderby string) (error, []Proxy) {
 	m := make(map[string]string)
 	m["orderby"] = orderby
 	result := c.client.get("proxy/getState", m)
@@ -103,7 +103,7 @@ func (c *GetProxy) state(orderby string) (error, []Proxy) {
 	return nil, response.List
 }
 
-func (c *GetProxy) stateOne(tzid int) (error, Proxy) {
+func (c *GetProxy) StateOne(tzid int) (error, Proxy) {
 	m := make(map[string]string)
 	m["tzid"] = strconv.Itoa(tzid)
 	result := c.client.get("proxy/getState", m)
@@ -121,7 +121,7 @@ func (c *GetProxy) stateOne(tzid int) (error, Proxy) {
 	return nil, response.List[0]
 }
 
-func (c *GetProxy) changeIp(tzid int) (error, bool) {
+func (c *GetProxy) ChangeIp(tzid int) (error, bool) {
 	m := make(map[string]string)
 	m["tzid"] = strconv.Itoa(tzid)
 	result := c.client.get("proxy/changeIp", m)
@@ -139,7 +139,7 @@ type ChangeTypeResponse struct {
 	ConnectType string      `json:"connect_type"`
 }
 
-func (c *GetProxy) changeType(tzid int) (error, string) {
+func (c *GetProxy) ChangeType(tzid int) (error, string) {
 	m := make(map[string]string)
 	m["tzid"] = strconv.Itoa(tzid)
 	result := c.client.get("proxy/changeType", m)
@@ -158,7 +158,7 @@ func (c *GetProxy) changeType(tzid int) (error, string) {
 	return nil, response.ConnectType
 }
 
-func (c *GetProxy) setComment(tzid int, comment string) (error, bool) {
+func (c *GetProxy) SetComment(tzid int, comment string) (error, bool) {
 	m := make(map[string]string)
 	m["tzid"] = strconv.Itoa(tzid)
 	m["comment"] = comment

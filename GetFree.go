@@ -50,7 +50,7 @@ type GetFree struct {
 	client *Onlinesim
 }
 
-func (c *GetFree) countries() (error, []Country) {
+func (c *GetFree) Countries() (error, []Country) {
 	m := make(map[string]string)
 	result := c.client.get("getFreeCountryList", m)
 
@@ -68,7 +68,7 @@ func (c *GetFree) countries() (error, []Country) {
 	return nil, response.Countries
 }
 
-func (c *GetFree) numbers(country int) (error, []Number) {
+func (c *GetFree) Numbers(country int) (error, []Number) {
 	m := make(map[string]string)
 	m["country"] = strconv.Itoa(country)
 	result := c.client.get("getFreePhoneList", m)
@@ -88,7 +88,7 @@ func (c *GetFree) numbers(country int) (error, []Number) {
 }
 
 //
-func (c *GetFree) messages(phone, page int) (error, []Message) {
+func (c *GetFree) Messages(phone, page int) (error, []Message) {
 	if page == 0 {
 		page = 1
 	}
