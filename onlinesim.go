@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	baseURL   = "https://onlinesim.ru/api"
+	baseURL   = "https://onlinesim.host/api"
 	rateLimit = 2
 )
 
