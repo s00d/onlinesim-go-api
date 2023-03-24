@@ -12,10 +12,10 @@ type GetNumbers struct {
 
 type PriceResponse struct {
 	Response interface{} `json:"response"`
-	Price    int         `json:"price"`
+	Price    float64     `json:"price"`
 }
 
-func (c *GetNumbers) Price(country int, service string) (error, int) {
+func (c *GetNumbers) Price(country int, service string) (error, float64) {
 	m := make(map[string]string)
 	m["service"] = service
 	m["country"] = strconv.Itoa(country)
