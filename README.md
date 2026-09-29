@@ -70,7 +70,7 @@ func main() {
 | `WithOAuth` | OAuth bearer token |
 | `WithBaseURL` | Override API base (also used with mock) |
 | `WithHTTPClient` | Custom `*http.Client` |
-| `WithRateLimit` | Requests per second (default `2`; `0` disables) |
+| `WithRateLimit` | Requests per second (default `1`; `0` disables). `setOperationOk` is also paced ≤1 / 5s |
 | `WithUserAgent` | Custom User-Agent |
 | `WithTimeout` | Timeout for the default HTTP client |
 

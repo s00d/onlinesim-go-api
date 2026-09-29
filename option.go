@@ -49,7 +49,8 @@ func WithHTTPClient(hc *http.Client) Option {
 	}
 }
 
-// WithRateLimit sets max requests per second (default 2). Pass 0 to disable.
+// WithRateLimit sets max requests per second (default 1). Pass 0 to disable.
+// setOperationOk is additionally paced at most once per 5s (OpenAPI).
 func WithRateLimit(rps int) Option {
 	return func(c *Client) {
 		c.rateLimit = rps

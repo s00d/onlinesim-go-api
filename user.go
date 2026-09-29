@@ -3,6 +3,7 @@ package onlinesim
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 )
 
@@ -15,6 +16,41 @@ type Balance struct {
 	Zbalance  float64  `json:"zbalance"`
 	Income    *float64 `json:"income,omitempty"`
 	IncomeUSD *float64 `json:"income_usd,omitempty"`
+}
+
+// UnmarshalJSON accepts balance fields as numbers or DECIMAL strings from the API.
+func (b *Balance) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Balance   json.RawMessage `json:"balance"`
+		Zbalance  json.RawMessage `json:"zbalance"`
+		Income    json.RawMessage `json:"income"`
+		IncomeUSD json.RawMessage `json:"income_usd"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var err error
+	if b.Balance, err = parseFlexFloat(raw.Balance); err != nil {
+		return fmt.Errorf("balance: %w", err)
+	}
+	if b.Zbalance, err = parseFlexFloat(raw.Zbalance); err != nil {
+		return fmt.Errorf("zbalance: %w", err)
+	}
+	if len(raw.Income) > 0 && string(raw.Income) != "null" {
+		v, err := parseFlexFloat(raw.Income)
+		if err != nil {
+			return fmt.Errorf("income: %w", err)
+		}
+		b.Income = &v
+	}
+	if len(raw.IncomeUSD) > 0 && string(raw.IncomeUSD) != "null" {
+		v, err := parseFlexFloat(raw.IncomeUSD)
+		if err != nil {
+			return fmt.Errorf("income_usd: %w", err)
+		}
+		b.IncomeUSD = &v
+	}
+	return nil
 }
 
 // UserPayment is payment summary inside a profile.

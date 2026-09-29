@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-09-29
+
+### Fixed
+
+- Live API decode: balance/income as DECIMAL strings, `ERROR_NO_OPERATIONS` → empty state, rent `TariffsOne` empty `[]`, `getPrice` null.
+- `getNum` accepts tariff keys with `service_` prefix (strips to slug).
+- Client pacing matches OpenAPI: default **1 rps**, `setOperationOk` ≥ **5s**, auto-retry on `INTERVAL_CONCURRENT_REQUESTS_ERROR`.
+
 ## [2.0.0] - 2026-09-29
 
 ### Breaking

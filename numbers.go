@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -212,8 +213,8 @@ func (a *NumbersAPI) Price(ctx context.Context, service string, country int) (fl
 		country = DefaultCountry
 	}
 	var resp struct {
-		Response any     `json:"response"`
-		Price    float64 `json:"price"`
+		Response any             `json:"response"`
+		Price    json.RawMessage `json:"price"`
 	}
 	err := a.c.tr.GetJSON(ctx, "getPrice", map[string]string{
 		"service": service,
@@ -222,7 +223,10 @@ func (a *NumbersAPI) Price(ctx context.Context, service string, country int) (fl
 	if err != nil {
 		return 0, err
 	}
-	return resp.Price, nil
+	if len(resp.Price) == 0 || string(resp.Price) == "null" {
+		return 0, nil
+	}
+	return parseFlexFloat(resp.Price)
 }
 
 // Get orders a number and returns tzid.
@@ -244,8 +248,9 @@ func (a *NumbersAPI) getRaw(ctx context.Context, p GetNumberParams) (NumberWithT
 	if p.Country == 0 {
 		p.Country = DefaultCountry
 	}
+	service := strings.TrimPrefix(p.Service, "service_")
 	params := map[string]string{
-		"service":   p.Service,
+		"service":   service,
 		"country":   strconv.Itoa(p.Country),
 		"extension": strconv.FormatBool(p.Extension),
 	}
@@ -296,6 +301,9 @@ func (a *NumbersAPI) State(ctx context.Context, p StateParams) ([]StateOne, erro
 	}
 	var list []StateOne
 	if err := a.c.tr.GetJSON(ctx, "getState", params, true, &list); err != nil {
+		if errors.Is(err, ErrNoOperations) {
+			return []StateOne{}, nil
+		}
 		return nil, err
 	}
 	return list, nil
@@ -314,6 +322,9 @@ func (a *NumbersAPI) StateOne(ctx context.Context, tzid int64, p StateParams) (S
 	params["tzid"] = strconv.FormatInt(tzid, 10)
 	var list []StateOne
 	if err := a.c.tr.GetJSON(ctx, "getState", params, true, &list); err != nil {
+		if errors.Is(err, ErrNoOperations) {
+			return StateOne{}, fmt.Errorf("no operation for tzid %d", tzid)
+		}
 		return StateOne{}, err
 	}
 	if len(list) == 0 {

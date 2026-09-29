@@ -1,7 +1,9 @@
 package onlinesim
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 )
@@ -151,11 +153,22 @@ func (a *RentAPI) TariffsOne(ctx context.Context, country int) (RentTariff, erro
 	if country == 0 {
 		country = DefaultCountry
 	}
-	var out RentTariff
+	var raw json.RawMessage
 	err := a.c.tr.GetJSON(ctx, "rent/tariffsRent", map[string]string{
 		"country": strconv.Itoa(country),
-	}, true, &out)
-	return out, err
+	}, true, &raw)
+	if err != nil {
+		return RentTariff{}, err
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" || (len(trimmed) > 0 && trimmed[0] == '[') {
+		return RentTariff{}, fmt.Errorf("no rent tariff for country %d", country)
+	}
+	var out RentTariff
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return RentTariff{}, fmt.Errorf("decode rent tariff: %w", err)
+	}
+	return out, nil
 }
 
 // Close closes a rent.

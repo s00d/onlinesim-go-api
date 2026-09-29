@@ -3,12 +3,20 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// TemporaryError is implemented by API errors that are safe to retry after a delay
+// (e.g. INTERVAL_CONCURRENT_REQUESTS_ERROR).
+type TemporaryError interface {
+	Temporary() bool
+}
 
 // Config holds shared HTTP transport settings.
 type Config struct {
@@ -21,6 +29,10 @@ type Config struct {
 	HTTPClient *http.Client
 	Limiter    *Limiter
 	ToError    ResponseChecker
+	// RetryInterval is the pause between retries on Temporary errors (default 5s).
+	RetryInterval time.Duration
+	// MaxRetries is extra attempts after the first failure (default 2 → 3 tries total).
+	MaxRetries int
 }
 
 // Client performs authenticated OnlineSim HTTP calls.
@@ -36,38 +48,12 @@ func New(cfg Config) *Client {
 // GetJSON performs GET path with query params and JSON-decodes into dest.
 // phpSuffix appends ".php" to the path (OnlineSim convention).
 func (c *Client) GetJSON(ctx context.Context, path string, params map[string]string, phpSuffix bool, dest any) error {
-	body, err := c.do(ctx, http.MethodGet, c.cfg.BaseURL, path, params, nil, phpSuffix, false)
-	if err != nil {
-		return err
-	}
-	if err := CheckResponseField(body, c.cfg.ToError); err != nil {
-		return err
-	}
-	if dest == nil {
-		return nil
-	}
-	if err := json.Unmarshal(body, dest); err != nil {
-		return fmt.Errorf("decode response: %w", err)
-	}
-	return nil
+	return c.roundTrip(ctx, http.MethodGet, c.cfg.BaseURL, path, params, nil, phpSuffix, false, dest)
 }
 
 // PostJSON performs POST with form or JSON body.
 func (c *Client) PostJSON(ctx context.Context, path string, params map[string]string, phpSuffix bool, dest any) error {
-	body, err := c.do(ctx, http.MethodPost, c.cfg.BaseURL, path, params, nil, phpSuffix, true)
-	if err != nil {
-		return err
-	}
-	if err := CheckResponseField(body, c.cfg.ToError); err != nil {
-		return err
-	}
-	if dest == nil {
-		return nil
-	}
-	if err := json.Unmarshal(body, dest); err != nil {
-		return fmt.Errorf("decode response: %w", err)
-	}
-	return nil
+	return c.roundTrip(ctx, http.MethodPost, c.cfg.BaseURL, path, params, nil, phpSuffix, true, dest)
 }
 
 // PostRawJSON posts a JSON body to path (no php suffix by default for profile/webhook).
@@ -76,28 +62,59 @@ func (c *Client) PostRawJSON(ctx context.Context, baseURL, path string, payload 
 	if err != nil {
 		return err
 	}
-	body, err := c.do(ctx, http.MethodPost, baseURL, path, nil, raw, phpSuffix, false)
-	if err != nil {
-		return err
-	}
-	if err := CheckResponseField(body, c.cfg.ToError); err != nil {
-		return err
-	}
-	if dest == nil {
-		return nil
-	}
-	if err := json.Unmarshal(body, dest); err != nil {
-		return fmt.Errorf("decode response: %w", err)
-	}
-	return nil
+	return c.roundTrip(ctx, http.MethodPost, baseURL, path, nil, raw, phpSuffix, false, dest)
 }
 
-func (c *Client) do(ctx context.Context, method, base, path string, params map[string]string, rawBody []byte, phpSuffix, asForm bool) ([]byte, error) {
-	return c.doWithAuth(ctx, method, base, path, params, rawBody, phpSuffix, asForm, c.cfg.OAuth)
+func (c *Client) roundTrip(ctx context.Context, method, base, path string, params map[string]string, rawBody []byte, phpSuffix, asForm bool, dest any) error {
+	maxRetries := c.cfg.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 2
+	}
+	retryEvery := c.cfg.RetryInterval
+	if retryEvery <= 0 {
+		retryEvery = 5 * time.Second
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(retryEvery)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+		body, err := c.doWithAuth(ctx, method, base, path, params, rawBody, phpSuffix, asForm, c.cfg.OAuth)
+		if err != nil {
+			return err
+		}
+		if err := CheckResponseField(body, c.cfg.ToError); err != nil {
+			lastErr = err
+			if attempt < maxRetries && isTemporary(err) {
+				continue
+			}
+			return err
+		}
+		if dest == nil {
+			return nil
+		}
+		if err := json.Unmarshal(body, dest); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		return nil
+	}
+	return lastErr
+}
+
+func isTemporary(err error) bool {
+	var t TemporaryError
+	return errors.As(err, &t) && t.Temporary()
 }
 
 func (c *Client) doWithAuth(ctx context.Context, method, base, path string, params map[string]string, rawBody []byte, phpSuffix, asForm bool, bearer string) ([]byte, error) {
-	if err := c.cfg.Limiter.Wait(ctx); err != nil {
+	if err := c.cfg.Limiter.WaitPath(ctx, path); err != nil {
 		return nil, err
 	}
 
