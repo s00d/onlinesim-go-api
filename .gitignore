@@ -1,3 +1,5 @@
-/vendor/
+*.iml
+.idea/
 /.env
 /node_modules
+/vendor/
