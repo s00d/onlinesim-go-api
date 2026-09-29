@@ -131,7 +131,7 @@ func TestFreeAndRent(t *testing.T) {
 		t.Fatalf("countries: %v %v", countries, err)
 	}
 
-	item, err := client.Rent().Get(ctx, onlinesim.GetRentParams{Country: 7, Days: 1})
+	item, err := client.Rent().Get(ctx, onlinesim.GetRentParams{Country: 1, Days: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

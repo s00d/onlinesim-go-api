@@ -150,7 +150,7 @@ go run ./examples/mock_sms_flow
 | `client.User()` | Balance / profile / payments / webhooks |
 | `client.Free()` | Public free numbers |
 
-Default country dial code is **`7`** (`DefaultCountry`) when `Country` is omitted.
+Default country dial code is **`1`** (USA, `DefaultCountry`) when `Country` is omitted.
 
 ## Examples
 

@@ -17,8 +17,8 @@ const (
 	// opOkMinInterval matches OpenAPI: setOperationOk on the same tzid at most once / 5s.
 	opOkMinInterval = 5 * time.Second
 	// DefaultCountry is the dial code used when Country is omitted (0).
-	// Matches OnlineSim OpenAPI / JS / PHP defaults (Rust currently uses 1).
-	DefaultCountry int = 7
+	// USA (1): RU (7) is unavailable / banned for typical API keys.
+	DefaultCountry int = 1
 )
 
 // Client is the OnlineSim API client.

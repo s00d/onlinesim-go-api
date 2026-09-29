@@ -17,7 +17,7 @@ func DefaultSmsScript() SmsScript {
 	return SmsScript{
 		Service: "telegram",
 		Number:  "+19001234567",
-		Country: 7,
+		Country: 1,
 		Code:    "123456",
 		Price:   "10",
 	}
@@ -32,7 +32,7 @@ func (m *Server) ScriptSMS(s SmsScript) {
 		s.Number = "+19001234567"
 	}
 	if s.Country == 0 {
-		s.Country = 7
+		s.Country = 1
 	}
 	if s.Code == "" {
 		s.Code = "123456"

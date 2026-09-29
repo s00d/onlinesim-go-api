@@ -173,7 +173,7 @@ func (m *Server) handleGetNum(w http.ResponseWriter, r *http.Request) {
 	service := q.Get("service")
 	country, _ := strconv.Atoi(q.Get("country"))
 	if country == 0 {
-		country = 7
+		country = 1
 	}
 	wantNumber := q.Get("number") == "true"
 
@@ -308,7 +308,7 @@ func (m *Server) handleTariffs(w http.ResponseWriter, r *http.Request) {
 func (m *Server) handleRentGet(w http.ResponseWriter, r *http.Request) {
 	country, _ := strconv.Atoi(r.URL.Query().Get("country"))
 	if country == 0 {
-		country = 7
+		country = 1
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
