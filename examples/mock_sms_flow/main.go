@@ -1,4 +1,4 @@
-// The order → code → close flow on the local mock, offline: go run ./examples/mock_sms_flow
+// The order → code → close flow on the in-process mock, offline: go run ./examples/mock_sms_flow
 package main
 
 import (
@@ -12,20 +12,21 @@ import (
 )
 
 func main() {
-	m := mock.Start()
-	defer m.Close()
-	m.ScriptSMS(mock.SmsScript{Service: "telegram", Number: "+19001234567", Code: "123456", PollsBeforeCode: 1})
-
+	m := mock.New(mock.WithBalance(10))
 	client := m.Client()
 	ctx := context.Background()
 
-	order, err := client.Numbers().GetWithNumber(ctx, "telegram", 1)
+	order, err := client.Numbers().GetWithNumber(ctx, "google", 44)
 	if err != nil {
 		log.Fatal(err)
 	}
-	code, err := client.Numbers().WaitCode(ctx, order.Tzid, onlinesim.WaitCodeOptions{Interval: 100 * time.Millisecond})
+	if err := m.AddSMSAfter(order.Tzid, "Your Google code: 123-456", 2); err != nil {
+		log.Fatal(err)
+	}
+	noSleep := func(context.Context, time.Duration) error { return nil }
+	code, err := client.Numbers().WaitCode(ctx, order.Tzid, onlinesim.WaitCodeOptions{Sleep: noSleep})
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("number=%s code=%s\n", order.Number, code)
+	fmt.Printf("number=%s code=%s balance=%.2f\n", order.Number, code, m.Balance())
 }

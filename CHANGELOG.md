@@ -5,7 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.0.0] - Unreleased
+## [3.1.0] - 2026-11-19
+
+### Added
+
+- In-process mock: `mock.New(opts...)` returns a `*mock.Mock`, an `http.RoundTripper` that answers every endpoint the SDK calls
+  like the real backend (HTTP 456 for a wrong key, string/int `response`, decimal-string money, `[]` for empty maps) and keeps
+  balance, operations and rents — no listener, network, key, money or clock. `m.Client(opts...)` returns a normal
+  `*onlinesim.Client` wired to it (`WithHTTPClient(&http.Client{Transport: m})` for a hand-built client). Options:
+  `WithAPIKey`, `WithBalance`, `WithPrices`, `WithRentTariffs`, `WithGuardInterval`.
+- Mock control API shared with the other OnlineSim SDKs: `AddSMS`, `AddSMSAfter` (lets `WaitCode` run with a no-op `Sleep`),
+  `FailNext`, `FailNextTransport` (`OnEndpoint`, `WithStatus`), `SetBalance`, `Balance`, `Operations`, `Rents`, `Requests`, `Reset`.
+  Deterministic: counter-based ids and numbers, fixed timestamps. Docs page: https://s00d.github.io/onlinesim-go-api/testing
+- CI: `staticcheck`, `govulncheck`, `go mod tidy -diff`, `go mod verify`, and a smoke test that runs the README "Testing" example
+  in an empty module against a `git archive` copy of the repository.
+- `.github/workflows/release.yml`: on a `vX.Y.Z` tag runs CI, checks the tag against CHANGELOG, creates the GitHub release and
+  warms the Go module proxy.
+
+### Changed
+
+- `mock.Start(opts...)` serves the same mock over HTTP (`*mock.Server` embeds `*mock.Mock`; `BaseURL`, `Client`, `Close` as before).
+  The mock follows the shared semantics: a real balance (price frozen on order, spent on close after an SMS, refunded without one),
+  numbers `+<country>9000000NN`, closed operations reported as `TZ_OVER_OK`, a wrong or missing key → 456 `ERROR_WRONG_KEY`.
+- The default mock key is `mock-key` (`mock.DefaultAPIKey`; `mock.APIKey` is a deprecated alias).
+
+### Removed
+
+- Mock helpers replaced by the shared control API: `ScriptSMS`/`SmsScript`/`DefaultSmsScript` (use `AddSMS`/`AddSMSAfter`),
+  `FailNoNumber` (`FailNext("NO_NUMBER", OnEndpoint("getNum.php"))`), `FailBalance` (`FailNext(code, OnEndpoint("getBalance.php"))`),
+  `AddRentSMS` (`AddSMS`), `SetBalance(balance, zbalance, income)` (`SetBalance(usd)`), and the state persistence
+  (`NewBuilder`, `StatePath`, `StatePathFromEnv`, `StatePathEnv`, `ResetState`).
+
+## [3.0.0] - 2026-11-19
 
 Aligned with the shared OnlineSim SDK contract. Module path is now `github.com/s00d/onlinesim-go-api/v3`;
 the step-by-step v2 → v3 table is in the docs: https://s00d.github.io/onlinesim-go-api/changelog#migrating-from-v2

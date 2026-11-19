@@ -6,7 +6,8 @@
 //	code, err := client.Numbers().WaitCode(ctx, order.Tzid, onlinesim.WaitCodeOptions{})
 //
 // Errors are *APIError (with *NoNumberError for NO_NUMBER), *TransportError and ErrTimeout.
-// A local HTTP mock for tests lives in github.com/s00d/onlinesim-go-api/v3/mock.
+// An offline mock for tests (in-process http.RoundTripper, or an HTTP server) lives in
+// github.com/s00d/onlinesim-go-api/v3/mock.
 //
 // Documentation: https://s00d.github.io/onlinesim-go-api/
 package onlinesim

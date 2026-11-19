@@ -2,10 +2,16 @@
 title: Changelog
 description: Release notes of onlinesim-go-api and the v2 → v3 migration.
 navigation:
-  order: 6
+  order: 7
 ---
 
 The full history is in [CHANGELOG.md](https://github.com/s00d/onlinesim-go-api/blob/master/CHANGELOG.md).
+
+## 3.1.0
+
+- New in-process mock: `mock.New(opts...)` is an `http.RoundTripper` that answers like the real API; `m.Client()` returns a normal client wired to it — no listener, network, key, money or clock. `mock.Start(opts...)` serves the same mock over HTTP. See [Testing](/testing).
+- Mock control API aligned with the other OnlineSim SDKs: `AddSMS`, `AddSMSAfter`, `FailNext`, `FailNextTransport`, `SetBalance`, `Balance`, `Operations`, `Rents`, `Requests`, `Reset`. It keeps a real balance (price frozen on order, spent on close after an SMS, refunded without one), derives tariffs from its prices and records webhook deliveries.
+- The old mock helpers (`ScriptSMS`, `SmsScript`, `FailNoNumber`, `FailBalance`, `AddRentSMS`, the 3-argument `SetBalance`, `NewBuilder`/`StatePath` persistence) are gone; the mock key is now `mock-key`.
 
 ## 3.0.0
 

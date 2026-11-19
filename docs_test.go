@@ -11,7 +11,9 @@ import (
 )
 
 // TestDocsExamplesCompile builds the Go examples of README.md and docs/content/*.md against this module,
-// so the docs cannot drift from the API. A ```go block that starts with `package` is a full program;
+// so the docs cannot drift from the API. A ```go block that starts with `package` (after optional `//`
+// comment lines) is a full file; one whose first line names a `_test.go` file is saved under that name and
+// its tests are run, so the assertions in the docs hold;
 // any other block that uses `client` is a fragment, compiled inside
 // func(ctx context.Context, client *onlinesim.Client, tzid int64) error. The rest are signatures.
 func TestDocsExamplesCompile(t *testing.T) {
@@ -39,6 +41,8 @@ func TestDocsExamplesCompile(t *testing.T) {
 
 	block := regexp.MustCompile("(?s)```go[^\n]*\n(.*?)```")
 	usesClient := regexp.MustCompile(`\bclient\b`)
+	isFile := regexp.MustCompile(`^(//[^\n]*\n)*package `)
+	testFile := regexp.MustCompile(`^// (\w+_test\.go)\n`)
 	count := 0
 	for _, source := range sources {
 		md, err := os.ReadFile(source)
@@ -47,7 +51,9 @@ func TestDocsExamplesCompile(t *testing.T) {
 			code := m[1]
 			name := fmt.Sprintf("%s_%d", strings.NewReplacer("/", "_", ".", "_").Replace(source), i)
 			switch {
-			case strings.HasPrefix(code, "package "):
+			case testFile.MatchString(code):
+				write(filepath.Join("tests", name, testFile.FindStringSubmatch(code)[1]), code)
+			case isFile.MatchString(code):
 				write(filepath.Join("programs", name, "main.go"), code)
 			case usesClient.MatchString(code):
 				write(filepath.Join("fragments", name+".go"), fragment(name, code))
@@ -61,11 +67,13 @@ func TestDocsExamplesCompile(t *testing.T) {
 		t.Fatalf("found only %d examples", count)
 	}
 
-	cmd := exec.Command(goBin, "build", "./...")
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOWORK=off")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("docs examples do not compile (%v):\n%s", err, out)
+	for _, args := range [][]string{{"build", "./..."}, {"vet", "./..."}, {"test", "-count=1", "./..."}} {
+		cmd := exec.Command(goBin, args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOWORK=off")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("docs examples: go %s failed (%v):\n%s", strings.Join(args, " "), err, out)
+		}
 	}
 }
 
