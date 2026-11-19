@@ -3,100 +3,95 @@ package onlinesim
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
-// Sentinel errors.
-var (
-	ErrTimeout      = errors.New("timeout waiting for SMS code")
-	ErrNoOperations = errors.New("no operations")
-)
-
-// APIError is returned when OnlineSim responds with a non-success response code.
+// APIError: the API answered with an error code in `response`.
+// A wrong key (HTTP 456 with {"response":"ERROR_WRONG_KEY"}) is an APIError too.
 type APIError struct {
-	Code    string
+	// Code is the raw error code, e.g. ERROR_WRONG_KEY.
+	Code string
+	// Message is the server's text, else a short English description of the code, else the code.
 	Message string
 }
 
+// newAPIError fills Message from the fallback table when the server sent none or only echoed the code.
+func newAPIError(code, message string) *APIError {
+	if message == "" || message == code {
+		message = errorMessages[code]
+	}
+	if message == "" {
+		message = code
+	}
+	return &APIError{Code: code, Message: message}
+}
+
 func (e *APIError) Error() string {
-	if e.Message == "" {
-		return e.Code
+	if e.Message == "" || e.Message == e.Code {
+		return "onlinesim: " + e.Code
 	}
-	return fmt.Sprintf("%s (%s)", e.Message, e.Code)
+	return "onlinesim: " + e.Code + ": " + e.Message
 }
 
-// Temporary reports whether the error is safe to retry after a short delay.
-// INTERVAL_CONCURRENT_REQUESTS_ERROR is documented as a frequency limit
-// (setOperationOk: min 5s between closes of the same tzid).
-func (e *APIError) Temporary() bool {
-	return e != nil && e.Code == "INTERVAL_CONCURRENT_REQUESTS_ERROR"
-}
-
-// NoNumberError is returned when no numbers are available.
+// NoNumberError: no number is available right now (NO_NUMBER, NO_NUMBER_FOR_FORWARD).
+// Retry later or pick another country. errors.As matches it as *APIError too.
 type NoNumberError struct {
-	Code string
+	APIError
 }
 
-func (e *NoNumberError) Error() string {
-	return fmt.Sprintf("no number available: %s", e.Code)
+// Unwrap exposes the embedded *APIError to errors.As.
+func (e *NoNumberError) Unwrap() error { return &e.APIError }
+
+// TransportError: network failure, request timeout, or a response that is not JSON.
+type TransportError struct {
+	// Status is the HTTP status, 0 when no response arrived (network error, timeout).
+	Status int
+	// Body is the start of the response body (up to 500 bytes), empty when none.
+	Body string
+	// Err is the underlying error (net error, context.DeadlineExceeded, context.Canceled), nil otherwise.
+	Err error
+
+	msg string
 }
 
-// RequestErrorMessage returns a human-readable description for an API error code.
-func RequestErrorMessage(code string) string {
-	if msg, ok := apiErrorMessages[code]; ok {
-		return msg
-	}
-	return "unknown API error"
+func (e *TransportError) Error() string { return "onlinesim: " + e.msg }
+
+// Unwrap returns the underlying error, so errors.Is(err, context.Canceled) works.
+func (e *TransportError) Unwrap() error { return e.Err }
+
+// ErrTimeout is returned (wrapped) by WaitCode when no code arrived within its Timeout.
+var ErrTimeout = errors.New("onlinesim: no code within the wait timeout")
+
+func waitTimeout(tzid int64, timeout time.Duration) error {
+	return fmt.Errorf("%w: operation %d, %s", ErrTimeout, tzid, timeout)
 }
 
-var apiErrorMessages = map[string]string{
-	"ACCOUNT_BLOCKED":                    "account blocked",
-	"ERROR_WRONG_KEY":                    "wrong apikey",
-	"ERROR_NO_KEY":                       "no apikey",
-	"ERROR_NO_SERVICE":                   "service not specified",
-	"REQUEST_NOT_FOUND":                  "API method not specified",
-	"API_ACCESS_DISABLED":                "api disabled",
-	"API_ACCESS_IP":                      "access from this ip is disabled in the profile",
-	"WARNING_NO_NUMS":                    "no matching numbers",
-	"WARNING_LOW_BALANCE":                "low balance",
-	"TZ_INPOOL":                          "waiting for a number to be dedicated to the operation",
-	"TZ_NUM_WAIT":                        "waiting for response",
-	"TZ_NUM_ANSWER":                      "response has arrived",
-	"TZ_OVER_EMPTY":                      "response did not arrive within the specified time",
-	"TZ_OVER_OK":                         "operation has been completed",
+// errorMessages are fallback messages for codes the server sends without a `message`.
+var errorMessages = map[string]string{
+	"ACCOUNT_BLOCKED":                    "Account is blocked",
+	"ERROR_WRONG_KEY":                    "Wrong API key",
+	"ERROR_NO_KEY":                       "API key is missing",
+	"ERROR_NO_SERVICE":                   "Service is not specified",
+	"API_ACCESS_DISABLED":                "API access is disabled in the profile",
+	"API_ACCESS_IP":                      "API access from this IP is not allowed in the profile",
 	"ERROR_NO_TZID":                      "tzid is not specified",
-	"ERROR_NO_OPERATIONS":                "no operations",
-	"ACCOUNT_IDENTIFICATION_REQUIRED":    "You have to go through an identification process: to order a messenger - in any way, for forward - on the passport.",
-	"EXCEEDED_CONCURRENT_OPERATIONS":     "maximum quantity of numbers booked concurrently is exceeded for your account",
-	"NO_NUMBER":                          "temporarily no numbers available for the selected service",
-	"NO_COUNTRY":                         "country is not available",
-	"UNDEFINED_COUNTRY":                  "country is not defined or not available",
-	"TIME_INTERVAL_ERROR":                "delayed SMS reception is not possible at this interval of time",
-	"INTERVAL_CONCURRENT_REQUESTS_ERROR": "request frequency exceeded (setOperationOk: max once per 5s per tzid)",
-	"TRY_AGAIN_LATER":                    "temporarily unable to perform the request",
-	"NO_FORWARD_FOR_DEFFER":              "forwarding can be activated only for online reception",
-	"NO_NUMBER_FOR_FORWARD":              "there are no numbers for forwarding",
-	"ERROR_LENGTH_NUMBER_FOR_FORWARD":    "wrong length of the number for forwarding",
-	"DUPLICATE_OPERATION":                "adding operations with identical parameters",
-	"ERROR_NO_NUMBER":                    "number is not specified",
-	"ERROR_PARAMS":                       "one or both parameters are wrong",
-	"LIFICYCLE_NUM_EXPIRED":              "the number has expired",
-	"NEED_EXTENSION_NUMBER":              "you have to extend the number, see the Extension tab",
-	"ERROR_NUMBERS_PARAMS":               "error in the number format",
-	"ERROR_WRONG_TZID":                   "error in the number format",
-	"NO_COMPLETE_TZID":                   "unable to complete the operation.",
-	"NO_CONFIRM_FORWARD":                 "unable to confirm forwarding",
-	"ERROR_NO_SERVICE_REPEAT":            "no services for repeated reception",
-	"SERVICE_TO_NUMBER_EMPTY":            "no numbers for repeated reception for this service",
-	"repeat disabled":                    "repeated reception is disabled for this account",
-}
-
-// ErrorFromAPICode maps an OnlineSim response code to a typed error.
-func ErrorFromAPICode(code string) error {
-	if code == "NO_NUMBER" || code == "NO_NUMBER_FOR_FORWARD" {
-		return &NoNumberError{Code: code}
-	}
-	if code == "ERROR_NO_OPERATIONS" {
-		return ErrNoOperations
-	}
-	return &APIError{Code: code, Message: RequestErrorMessage(code)}
+	"ERROR_WRONG_TZID":                   "Wrong tzid",
+	"ERROR_NO_OPERATIONS":                "No operations",
+	"NO_NUMBER":                          "No numbers available for this service right now",
+	"NO_NUMBER_FOR_FORWARD":              "No numbers available for forwarding",
+	"NO_COUNTRY":                         "Country not found",
+	"UNDEFINED_COUNTRY":                  "Unknown country",
+	"WARNING_LOW_BALANCE":                "Not enough balance",
+	"EXCEEDED_CONCURRENT_OPERATIONS":     "Too many concurrent operations for this account",
+	"INTERVAL_CONCURRENT_REQUESTS_ERROR": "Too many concurrent requests, try again in a few seconds",
+	"TRY_AGAIN_LATER":                    "Temporarily unable to perform the request, try again later",
+	"ACCOUNT_IDENTIFICATION_REQUIRED":    "Account identification is required",
+	"ERROR_PARAMS":                       "Wrong parameters",
+	"API_DISABLED":                       "API is disabled",
+	"NO_COMPLETE_TZID":                   "The operation cannot be closed yet",
+	"NO_CLOSE_RENT_US":                   "US rent numbers cannot be closed early",
+	"UNDEFINED_DAYS":                     "Unknown rent period",
+	"VALIDATION_ERROR":                   "Validation failed",
+	"TZ_OVER_OK":                         "Operation finished without a new code",
+	"ERROR_NO_ITEMS":                     "Operation failed",
 }

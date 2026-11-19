@@ -1,88 +1,269 @@
 package onlinesim
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
-
-	"github.com/s00d/onlinesim-go-api/v2/internal/transport"
 )
+
+// DefaultBaseURL is the production API base.
+const DefaultBaseURL = "https://onlinesim.host/api/"
 
 const (
-	defaultBaseURL   = "https://onlinesim.host/api"
-	defaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36"
-	// defaultRateLimit is 1 rps — OnlineSim rejects denser traffic with
-	// INTERVAL_CONCURRENT_REQUESTS_ERROR (OpenAPI: reduce request intensity).
-	defaultRateLimit = 1
-	defaultTimeout   = 30 * time.Second
-	// opOkMinInterval matches OpenAPI: setOperationOk on the same tzid at most once / 5s.
-	opOkMinInterval = 5 * time.Second
-	// DefaultCountry is the dial code used when Country is omitted (0).
-	// USA (1): RU (7) is unavailable / banned for typical API keys.
-	DefaultCountry int = 1
+	defaultTimeout = 30 * time.Second
+	bodyExcerpt    = 500
+	userAgent      = "onlinesim-go-api/3"
 )
 
-// Client is the OnlineSim API client.
+// Client is the OnlineSim API client. It is safe for concurrent use.
+//
+//	client := onlinesim.New(os.Getenv("ONLINESIM_KEY"))
+//	b, err := client.User().Balance(ctx)
 type Client struct {
-	apiKey     string
-	lang       string
-	devID      *int64
-	oauth      string
-	baseURL    string
-	userAgent  string
-	rateLimit  int
-	timeout    time.Duration
-	httpClient *http.Client
+	apiKey  string
+	baseURL string
+	lang    string
+	devID   string
+	timeout time.Duration
+	http    *http.Client
 
-	tr *transport.Client
+	numbers *NumbersAPI
+	rent    *RentAPI
+	user    *UserAPI
+	free    *FreeAPI
 }
 
-// New creates a Client with the given API key and options.
+// Option configures a Client.
+type Option func(*Client)
+
+// WithBaseURL sets the full API base (default DefaultBaseURL); the trailing slash is optional.
+func WithBaseURL(baseURL string) Option {
+	return func(c *Client) { c.baseURL = baseURL }
+}
+
+// WithLang sets the language of server texts, the `lang` query parameter (default "en").
+func WithLang(lang string) Option {
+	return func(c *Client) { c.lang = lang }
+}
+
+// WithDevID sets the partner developer id, the `dev_id` query parameter (not sent by default).
+func WithDevID(devID int64) Option {
+	return func(c *Client) { c.devID = strconv.FormatInt(devID, 10) }
+}
+
+// WithTimeout sets the per-request timeout (default 30 s). It applies to an injected
+// *http.Client too. A timeout returns *TransportError.
+func WithTimeout(d time.Duration) Option {
+	return func(c *Client) { c.timeout = d }
+}
+
+// WithHTTPClient sets the transport: a proxy, a custom TLS setup, a rate-limiting
+// RoundTripper, or a fake in tests. Default: a plain &http.Client{}.
+func WithHTTPClient(hc *http.Client) Option {
+	return func(c *Client) { c.http = hc }
+}
+
+// New creates a client. apiKey is sent as `Authorization: Bearer <apiKey>`, never in the URL;
+// it may be empty for the key-free calls (tariffs, free numbers).
 func New(apiKey string, opts ...Option) *Client {
-	c := &Client{
-		apiKey:     apiKey,
-		lang:       "en",
-		baseURL:    defaultBaseURL,
-		userAgent:  defaultUserAgent,
-		rateLimit:  defaultRateLimit,
-		timeout:    defaultTimeout,
-	}
+	c := &Client{apiKey: apiKey, baseURL: DefaultBaseURL, lang: "en", timeout: defaultTimeout}
 	for _, opt := range opts {
 		opt(c)
 	}
-	if c.httpClient == nil {
-		c.httpClient = &http.Client{Timeout: c.timeout}
+	if !strings.HasSuffix(c.baseURL, "/") {
+		c.baseURL += "/"
 	}
-	lim := transport.NewLimiter(c.rateLimit)
-	// Backend: repeated setOperationOk for the same tzid more often than once
-	// every 5 seconds → INTERVAL_CONCURRENT_REQUESTS_ERROR.
-	lim.SetPathInterval("setOperationOk", opOkMinInterval)
-	c.tr = transport.New(transport.Config{
-		BaseURL:       c.baseURL,
-		APIKey:        c.apiKey,
-		Lang:          c.lang,
-		DevID:         c.devID,
-		OAuth:         c.oauth,
-		UserAgent:     c.userAgent,
-		HTTPClient:    c.httpClient,
-		Limiter:       lim,
-		ToError:       ErrorFromAPICode,
-		RetryInterval: opOkMinInterval,
-		MaxRetries:    2,
-	})
+	if c.http == nil {
+		c.http = &http.Client{}
+	}
+	c.numbers = &NumbersAPI{do: c.do}
+	c.rent = &RentAPI{do: c.do}
+	c.user = &UserAPI{do: c.do}
+	c.free = &FreeAPI{do: c.do}
 	return c
 }
 
-// BaseURL returns the configured OnlineSim base URL.
-func (c *Client) BaseURL() string { return c.baseURL }
+// Numbers returns the numbers section (order a number, read its SMS, close it).
+func (c *Client) Numbers() *NumbersAPI { return c.numbers }
 
-// Numbers returns the temporary SMS numbers API.
-func (c *Client) Numbers() *NumbersAPI { return &NumbersAPI{c: c} }
+// Rent returns the rent section.
+func (c *Client) Rent() *RentAPI { return c.rent }
 
-// Free returns the free public numbers API.
-func (c *Client) Free() *FreeAPI { return &FreeAPI{c: c} }
+// User returns the account section (balance, profile, payments, webhook URL).
+func (c *Client) User() *UserAPI { return c.user }
 
-// Rent returns the long-term rent API.
-func (c *Client) Rent() *RentAPI { return &RentAPI{c: c} }
+// Free returns the free public numbers section.
+func (c *Client) Free() *FreeAPI { return c.free }
 
-// User returns the user / balance / webhook settings API.
-func (c *Client) User() *UserAPI { return &UserAPI{c: c} }
+// doFunc is the one request function the sections share. endpoint is relative to the base URL,
+// suffix included ("getNum.php"). A non-nil body switches to POST with a JSON body.
+// The decoded response is stored into out (may be nil).
+type doFunc func(ctx context.Context, endpoint string, q url.Values, body, out any) error
+
+func (c *Client) do(ctx context.Context, endpoint string, q url.Values, body, out any) error {
+	if q == nil {
+		q = url.Values{}
+	}
+	q.Set("lang", c.lang)
+	if c.devID != "" {
+		q.Set("dev_id", c.devID)
+	}
+	u := c.baseURL + endpoint + "?" + q.Encode()
+
+	method := http.MethodGet
+	var reader io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("onlinesim: encode body: %w", err)
+		}
+		method, reader = http.MethodPost, bytes.NewReader(raw)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, u, reader)
+	if err != nil {
+		return fmt.Errorf("onlinesim: build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	res, err := c.http.Do(req)
+	if err != nil {
+		return c.networkError(ctx, err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		return c.networkError(ctx, err)
+	}
+	return decode(res.StatusCode, raw, out)
+}
+
+func (c *Client) networkError(ctx context.Context, err error) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &TransportError{Err: context.DeadlineExceeded, msg: fmt.Sprintf("request timed out after %s", c.timeout)}
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return &TransportError{Err: ctxErr, msg: "request canceled: " + ctxErr.Error()}
+	}
+	return &TransportError{Err: err, msg: "network error: " + err.Error()}
+}
+
+// decode applies the response rules: non-JSON → TransportError; an object with `response`
+// → success or APIError (checked before the HTTP status: a wrong key is HTTP 456 with a JSON code);
+// anything else → TransportError on a non-2xx status, the body otherwise.
+func decode(status int, body []byte, out any) error {
+	excerpt := string(body)
+	if len(excerpt) > bodyExcerpt {
+		excerpt = excerpt[:bodyExcerpt]
+	}
+	if !json.Valid(body) {
+		return &TransportError{Status: status, Body: excerpt, msg: fmt.Sprintf("HTTP %d: response is not JSON", status)}
+	}
+	if trimmed := bytes.TrimSpace(body); len(trimmed) > 0 && trimmed[0] == '{' {
+		var top map[string]json.RawMessage
+		if err := json.Unmarshal(body, &top); err == nil {
+			if code, ok := top["response"]; ok {
+				if err := checkResponse(code, top["message"]); err != nil {
+					return err
+				}
+				return into(status, body, excerpt, out)
+			}
+		}
+	}
+	if status < 200 || status >= 300 {
+		return &TransportError{Status: status, Body: excerpt, msg: fmt.Sprintf("HTTP %d", status)}
+	}
+	return into(status, body, excerpt, out)
+}
+
+func into(status int, body []byte, excerpt string, out any) error {
+	if out == nil {
+		return nil
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return &TransportError{Status: status, Body: excerpt, Err: err, msg: "unexpected response shape: " + err.Error()}
+	}
+	return nil
+}
+
+// checkResponse: `1`/`"1"` is success, an object is a validation error, anything else an error code.
+func checkResponse(response, message json.RawMessage) error {
+	raw := bytes.TrimSpace(response)
+	if string(raw) == "1" || string(raw) == `"1"` {
+		return nil
+	}
+	if len(raw) > 0 && raw[0] == '{' {
+		// profile.php: {"response":{"webhook_url":["The webhook url must be a valid URL."]}}
+		return newAPIError("VALIDATION_ERROR", validationMessage(raw))
+	}
+	var code string
+	if err := json.Unmarshal(raw, &code); err != nil {
+		code = string(raw)
+	}
+	var msg string
+	_ = json.Unmarshal(message, &msg)
+	apiErr := newAPIError(code, msg)
+	if code == "NO_NUMBER" || code == "NO_NUMBER_FOR_FORWARD" {
+		return &NoNumberError{APIError: *apiErr}
+	}
+	return apiErr
+}
+
+// validationMessage joins the field messages with "; ", in the order the server sent them.
+func validationMessage(raw json.RawMessage) string {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if _, err := dec.Token(); err != nil { // {
+		return ""
+	}
+	var parts []string
+	for dec.More() {
+		if _, err := dec.Token(); err != nil { // field name
+			break
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			break
+		}
+		var list []any
+		var one any
+		switch {
+		case json.Unmarshal(value, &list) == nil:
+			for _, v := range list {
+				parts = append(parts, fmt.Sprint(v))
+			}
+		case json.Unmarshal(value, &one) == nil:
+			parts = append(parts, fmt.Sprint(one))
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+func boolParam(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
+
+func tzidParam(tzid int64) url.Values {
+	return url.Values{"tzid": {strconv.FormatInt(tzid, 10)}}
+}

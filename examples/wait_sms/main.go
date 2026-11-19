@@ -1,35 +1,29 @@
+// Orders a number and waits for its SMS code (paid): ONLINESIM_KEY=... go run ./examples/wait_sms
 package main
 
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
-	"time"
 
-	onlinesim "github.com/s00d/onlinesim-go-api/v2"
+	onlinesim "github.com/s00d/onlinesim-go-api/v3"
 )
 
 func main() {
-	apiKey := os.Getenv("ONLINESIM_APIKEY")
-	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "set ONLINESIM_APIKEY")
-		os.Exit(1)
-	}
-	client := onlinesim.New(apiKey)
+	client := onlinesim.New(os.Getenv("ONLINESIM_KEY"))
 	ctx := context.Background()
 
-	tzid, err := client.Numbers().Get(ctx, onlinesim.GetNumberParams{Service: "telegram"})
+	order, err := client.Numbers().GetWithNumber(ctx, "telegram", 44)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
-	fmt.Println("tzid", tzid)
+	fmt.Println("enter", order.Number, "in the app")
 
-	code, err := client.Numbers().WaitCode(ctx, tzid, onlinesim.WaitCodeOptions{
-		Interval:    5 * time.Second,
-		MaxAttempts: 24,
-	})
+	// Polls every 5 s for up to 10 min, then closes the operation.
+	code, err := client.Numbers().WaitCode(ctx, order.Tzid, onlinesim.WaitCodeOptions{})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
-	fmt.Println("code", code)
+	fmt.Println("code:", code)
 }

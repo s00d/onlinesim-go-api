@@ -2,6 +2,8 @@ package mock
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"strconv"
 )
@@ -16,6 +18,14 @@ type operation struct {
 	Closed          bool   `json:"closed"`
 }
 
+type rentOp struct {
+	Number    string
+	Country   int
+	Days      int
+	Extension bool
+	Messages  []map[string]any
+}
+
 type persistedState struct {
 	Version    uint                 `json:"version"`
 	Balance    float64              `json:"balance"`
@@ -26,28 +36,34 @@ type persistedState struct {
 	Ops        map[string]operation `json:"ops"`
 }
 
+// mockState is owned by Server and only touched under Server.mu.
 type mockState struct {
 	Balance      float64
 	Zbalance     float64
 	Income       float64
-	balanceError *string
+	balanceError string
 	WebhookURL   *string
 	NextTzid     int64
 	scripts      []SmsScript
 	ops          map[int64]operation
-	noNumberFor  []string
-	rentOps      map[int64]operation
+	noNumberFor  map[string]bool
+	rents        map[int64]*rentOp
 }
 
 func newMockState() *mockState {
 	return &mockState{
-		Balance:  100,
-		Zbalance: 0,
-		Income:   0,
-		NextTzid: 1000,
-		ops:      map[int64]operation{},
-		rentOps:  map[int64]operation{},
+		Balance:     100,
+		NextTzid:    1000,
+		ops:         map[int64]operation{},
+		noNumberFor: map[string]bool{},
+		rents:       map[int64]*rentOp{},
 	}
+}
+
+func (s *mockState) nextTzid() int64 {
+	id := s.NextTzid
+	s.NextTzid++
+	return id
 }
 
 func (s *mockState) toPersisted() persistedState {
@@ -56,31 +72,21 @@ func (s *mockState) toPersisted() persistedState {
 		ops[strconv.FormatInt(id, 10)] = op
 	}
 	return persistedState{
-		Version:    1,
-		Balance:    s.Balance,
-		Zbalance:   s.Zbalance,
-		Income:     s.Income,
-		WebhookURL: s.WebhookURL,
-		NextTzid:   s.NextTzid,
-		Ops:        ops,
+		Version: 1, Balance: s.Balance, Zbalance: s.Zbalance, Income: s.Income,
+		WebhookURL: s.WebhookURL, NextTzid: s.NextTzid, Ops: ops,
 	}
 }
 
 func (s *mockState) applyPersisted(p persistedState) {
-	s.Balance = p.Balance
-	s.Zbalance = p.Zbalance
-	s.Income = p.Income
-	s.WebhookURL = p.WebhookURL
+	s.Balance, s.Zbalance, s.Income, s.WebhookURL = p.Balance, p.Zbalance, p.Income, p.WebhookURL
 	if p.NextTzid > 0 {
 		s.NextTzid = p.NextTzid
 	}
 	s.ops = map[int64]operation{}
 	for k, op := range p.Ops {
-		id, err := strconv.ParseInt(k, 10, 64)
-		if err != nil {
-			continue
+		if id, err := strconv.ParseInt(k, 10, 64); err == nil {
+			s.ops[id] = op
 		}
-		s.ops[id] = op
 	}
 }
 
@@ -89,10 +95,10 @@ func (m *Server) loadState() error {
 		return nil
 	}
 	data, err := os.ReadFile(m.statePath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
 	var p persistedState
@@ -103,12 +109,12 @@ func (m *Server) loadState() error {
 	return nil
 }
 
+// saveLocked writes the state file; the caller holds m.mu.
 func (m *Server) saveLocked() {
 	if m.statePath == "" {
 		return
 	}
-	p := m.state.toPersisted()
-	data, err := json.MarshalIndent(p, "", "  ")
+	data, err := json.MarshalIndent(m.state.toPersisted(), "", "  ")
 	if err != nil {
 		return
 	}

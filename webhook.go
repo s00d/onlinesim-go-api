@@ -1,115 +1,69 @@
 package onlinesim
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
-	"strconv"
+	"errors"
 )
 
-// WebhookType is the service that produced the webhook.
+// WebhookType is the kind of operation a webhook reports.
 type WebhookType string
 
+// Webhook types.
 const (
 	WebhookReceivingSMS WebhookType = "receiving_sms"
 	WebhookRentSMS      WebhookType = "rent_sms"
 )
 
-// WebhookPayload is the JSON body OnlineSim POSTs to your webhook_url.
+// WebhookPayload is an inbound webhook body as normalised by ParseWebhook.
+// Missing or malformed fields are zero values ("" or 0).
 type WebhookPayload struct {
-	UserID      int64       `json:"user_id"`
-	CountryCode int64       `json:"country_code"`
-	Number      string      `json:"number"`
-	Sender      string      `json:"sender"`
-	Message     string      `json:"message"`
-	TimeStart   string      `json:"time_start"`
-	TimeLeft    int64       `json:"time_left"`
-	OperationID int64       `json:"operation_id"`
-	WebhookType WebhookType `json:"webhook_type"`
-	Code        string      `json:"code"`
+	// WebhookType is WebhookReceivingSMS, WebhookRentSMS, or "" for anything else.
+	WebhookType WebhookType
+	// OperationID is the tzid of the operation or rent.
+	OperationID int64
+	UserID      int64
+	CountryCode int
+	// Number is the number, e.g. "+79001234567".
+	Number string
+	// Sender of the SMS, e.g. "VK".
+	Sender string
+	// Message is the full SMS text.
+	Message string
+	// Code is the code extracted from the SMS.
+	Code      string
+	TimeStart string
+	TimeLeft  int64
 }
 
-// ParseWebhookJSON parses an inbound webhook body.
-// Accepts a flat payload or { "data": { ... } }.
-func ParseWebhookJSON(data []byte) (WebhookPayload, error) {
-	data = bytes.TrimSpace(data)
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return WebhookPayload{}, fmt.Errorf("invalid webhook payload: %w", err)
+// ParseWebhook parses an inbound webhook body (receiving_sms or rent_sms). It is lenient: numeric fields
+// may arrive as strings, missing or malformed fields become zero values, unknown fields are ignored.
+// It returns an error only when data is not a JSON object.
+func ParseWebhook(data []byte) (WebhookPayload, error) {
+	var d map[string]json.RawMessage
+	if err := json.Unmarshal(data, &d); err != nil {
+		return WebhookPayload{}, errors.New("onlinesim: webhook payload is not a JSON object")
 	}
-	if inner, ok := raw["data"]; ok {
-		var probe map[string]json.RawMessage
-		if err := json.Unmarshal(inner, &probe); err == nil && probe != nil {
-			raw = probe
-		}
+	if d == nil { // JSON null
+		return WebhookPayload{}, errors.New("onlinesim: webhook payload is not a JSON object")
 	}
-	var p WebhookPayload
-	var err error
-	if p.UserID, err = flexInt64(raw["user_id"]); err != nil {
-		return WebhookPayload{}, fmt.Errorf("user_id: %w", err)
+	p := WebhookPayload{
+		OperationID: int64Of(d["operation_id"]),
+		UserID:      int64Of(d["user_id"]),
+		CountryCode: int(int64Of(d["country_code"])),
+		Number:      str(d["number"]),
+		Sender:      str(d["sender"]),
+		Message:     str(d["message"]),
+		Code:        str(d["code"]),
+		TimeStart:   str(d["time_start"]),
+		TimeLeft:    int64Of(d["time_left"]),
 	}
-	if p.CountryCode, err = flexInt64(raw["country_code"]); err != nil {
-		return WebhookPayload{}, fmt.Errorf("country_code: %w", err)
-	}
-	if p.Number, err = flexString(raw["number"]); err != nil {
-		return WebhookPayload{}, fmt.Errorf("number: %w", err)
-	}
-	if p.Sender, err = flexString(raw["sender"]); err != nil {
-		return WebhookPayload{}, fmt.Errorf("sender: %w", err)
-	}
-	if p.Message, err = flexString(raw["message"]); err != nil {
-		return WebhookPayload{}, fmt.Errorf("message: %w", err)
-	}
-	if p.TimeStart, err = flexString(raw["time_start"]); err != nil {
-		return WebhookPayload{}, fmt.Errorf("time_start: %w", err)
-	}
-	if p.TimeLeft, err = flexInt64(raw["time_left"]); err != nil {
-		return WebhookPayload{}, fmt.Errorf("time_left: %w", err)
-	}
-	if p.OperationID, err = flexInt64(raw["operation_id"]); err != nil {
-		return WebhookPayload{}, fmt.Errorf("operation_id: %w", err)
-	}
-	wt, err := flexString(raw["webhook_type"])
-	if err != nil {
-		return WebhookPayload{}, fmt.Errorf("webhook_type: %w", err)
-	}
-	p.WebhookType = WebhookType(wt)
-	if p.Code, err = flexString(raw["code"]); err != nil {
-		return WebhookPayload{}, fmt.Errorf("code: %w", err)
+	if t := WebhookType(str(d["webhook_type"])); t == WebhookReceivingSMS || t == WebhookRentSMS {
+		p.WebhookType = t
 	}
 	return p, nil
 }
 
-func flexString(raw json.RawMessage) (string, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return "", nil
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return s, nil
-	}
-	var n json.Number
-	if err := json.Unmarshal(raw, &n); err == nil {
-		return n.String(), nil
-	}
-	return "", fmt.Errorf("expected string or number, got %s", string(raw))
-}
-
-func flexInt64(raw json.RawMessage) (int64, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return 0, fmt.Errorf("missing")
-	}
-	var n int64
-	if err := json.Unmarshal(raw, &n); err == nil {
-		return n, nil
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return strconv.ParseInt(s, 10, 64)
-	}
-	var f float64
-	if err := json.Unmarshal(raw, &f); err == nil {
-		return int64(f), nil
-	}
-	return 0, fmt.Errorf("expected int, got %s", string(raw))
+func int64Of(raw json.RawMessage) int64 {
+	n, _ := num(raw)
+	return int64(n)
 }
