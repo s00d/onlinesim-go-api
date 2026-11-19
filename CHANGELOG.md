@@ -5,6 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - Unreleased
+
+Aligned with the shared OnlineSim SDK contract. Module path is now `github.com/s00d/onlinesim-go-api/v3`;
+the step-by-step v2 → v3 table is in the docs: https://s00d.github.io/onlinesim-go-api/changelog#migrating-from-v2
+
+### Removed
+
+- `Numbers().Repeat` (getNumRepeat), `Numbers().Service` (getService), `Numbers().ServiceNumber` (getServiceNumber): no backend route.
+- `Rent().PortReload`: deprecated no-op on the backend.
+- `User().CreateEmpty` (pay/createEmpty).
+- `Free().Countries`, `Free().Numbers`, `Free().Messages`: the backend returns empty data for them; use `Free().List`.
+- `WithOAuth`, `WithUserAgent`, `WithRateLimit`, `DefaultCountry`, `Client.BaseURL()`, `IntPtr`, `BoolPtr`, `DefaultWaitCodeOptions`,
+  `ErrNoOperations`, `RequestErrorMessage`, `ErrorFromAPICode`, `APIError.Temporary`, `PayList`, `Pay`, `Balance.IncomeUSD`.
+- Client-side pacing (1 rps, 5 s per `setOperationOk` path) and the automatic retry of `INTERVAL_CONCURRENT_REQUESTS_ERROR`.
+- `internal/transport`; the GitHub Wiki links (replaced by the docs site).
+
+### Changed
+
+- The API key is sent as `Authorization: Bearer <key>`, never as the `apikey` query parameter.
+- Methods take plain arguments instead of param structs: `Numbers().Get(ctx, service, country, reject...)`,
+  `GetWithNumber` (returns `NumberOrder`), `Rent().Get(ctx, country, days, extension)`, `Rent().Extend(ctx, tzid, days)`,
+  `User().PaymentHistory(ctx, page)`, `User().WebhookLogs(ctx, page)`, `User().SetWebhookURL(ctx, url)`, `Free().List(ctx, FreeListOptions)`.
+  No zero-value substitution: the country is always sent as given.
+- `StateParams` → `StateOptions{FullMessage, OrderBy, MsgList}` where every zero field is the default; `orderby` is sent lowercase;
+  the result type `StateOne` → `Operation` with `Msg OperationMsg{Text, List}`; `State` returns an empty slice on `ERROR_NO_OPERATIONS`,
+  `StateOne` returns `*APIError` `ERROR_NO_OPERATIONS`. Both send `number=1` (guard interval).
+- `WaitCodeOptions{Interval, Timeout, KeepOpen, FullMessage, Since, Sleep, Now}` (was `Interval, MaxAttempts, NotEnd, FullMessage`).
+- Errors: `*APIError{Code, Message}`, `*NoNumberError` (embeds `APIError`), `*TransportError{Status, Body, Err}`, `ErrTimeout`.
+- Typed results: `CountryStat`/`ServiceStat` (were `TariffCountryOne`/`TariffService` with `any` fields), `RentItem` (`Sum float64`,
+  `Extend map[string]float64`), `RentTariff`, `Profile` (was `User`), `PaymentHistory`, `Paginator[T]`, `FreeList`, `WebhookLog`.
+- `ParseWebhookJSON` → `ParseWebhook`; the `{"data": …}` wrapper is no longer accepted.
+- `WithTimeout` is a per-request timeout that applies to an injected `*http.Client` too.
+- Rent reads send `pagination=0` and `number=1`; `Rent().Get` always sends `extension` as `1`/`0`. Booleans are `1`/`0` everywhere.
+- Mock: strict paths and Bearer key, base URL `…/api/`, `SmsScript.Price` is `float64`, real-API answers (`ERROR_NO_OPERATIONS`, `[]` rent tariffs, validation errors).
+- Go 1.22 floor; CI on Go 1.22 and stable with `gofmt -l`, `go vet`, golangci-lint v2, `go test -race`.
+
+### Fixed
+
+- `WaitCode` ignored terminal states (`TZ_OVER_OK`, `ERROR_NO_ITEMS`) and gave up after 10 polls by default; it now uses a 600 s timeout
+  and returns `*APIError` at once for a finished operation.
+- A non-2xx response lost the API code: the body is now checked before the status (HTTP 456 `ERROR_WRONG_KEY` → `*APIError`).
+- Non-JSON responses are `*TransportError` instead of a decode error or silent success.
+- `ParseWebhook` no longer fails on a missing or malformed numeric field.
+- `ClearWebhookURL` sent `""`; it now sends JSON `null`.
+- `getNum` sent `number=true` and `extension`; `number` is a presence flag sent only by `GetWithNumber`.
+- `reject` is a comma list of strings (number prefixes), not ints.
+- Empty PHP maps `[]` (country `services`, rent `extend`, `paylist`, free `numbers`) decode as empty maps.
+- Tests no longer depend on wall-clock timing.
+
+### Added
+
+- `Free().List(ctx, FreeListOptions{Country, Number, Page, Count})`.
+- `WaitCodeOptions.Since`, injectable `Sleep` / `Now`; retries transient transport errors until the timeout.
+- `VALIDATION_ERROR` mapping for profile validation errors.
+- `mock.APIKey`, `Server.AddRentSMS`.
+- Offline test suite per method, opt-in integration test (`ONLINESIM_IT_BASE`, `ONLINESIM_IT_KEY`), a test that compiles the docs examples.
+- Documentation site (Nuxt Content): https://s00d.github.io/onlinesim-go-api/
+
 ## [2.0.2] - 2026-09-29
 
 ### Changed

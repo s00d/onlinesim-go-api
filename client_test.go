@@ -2,225 +2,192 @@ package onlinesim_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"net/http"
+	"strings"
 	"testing"
+	"time"
 
-	onlinesim "github.com/s00d/onlinesim-go-api/v2"
-	"github.com/s00d/onlinesim-go-api/v2/mock"
+	onlinesim "github.com/s00d/onlinesim-go-api/v3"
 )
 
-func TestBalanceAndProfile(t *testing.T) {
-	m := mock.Start()
-	defer m.Close()
-	m.SetBalance(42.5, 1, 3)
-
-	client := m.Client()
-	ctx := context.Background()
-
-	bal, err := client.User().Balance(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bal.Balance != 42.5 {
-		t.Fatalf("balance=%v", bal.Balance)
-	}
-
-	profile, err := client.User().Profile(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if profile.ID != 1 {
-		t.Fatalf("profile id=%d", profile.ID)
-	}
+func TestBearerHeaderNeverQueryPlusLang(t *testing.T) {
+	c, f := fakeClient(t, []reply{ok(`{"response":"1","price":0.36}`)})
+	_, err := c.Numbers().Price(ctx, "vkcom", 44)
+	must(t, err)
+	call := f.last()
+	eq(t, call.header.Get("Authorization"), "Bearer test-key")
+	eq(t, call.header.Get("Accept"), "application/json")
+	eq(t, call.lang, "en")
+	_, hasKey := call.query["apikey"]
+	_, hasDev := call.query["dev_id"]
+	eq(t, hasKey || hasDev, false)
 }
 
-func TestGetNumAndWaitCode(t *testing.T) {
-	m := mock.Start()
-	defer m.Close()
-	m.ScriptSMS(mock.SmsScript{
-		Service:         "telegram",
-		Number:          "+19001234567",
-		Code:            "654321",
-		PollsBeforeCode: 1,
-	})
-
-	client := m.Client()
-	ctx := context.Background()
-
-	ordered, err := client.Numbers().GetWithNumber(ctx, onlinesim.GetNumberParams{Service: "telegram"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ordered.Number != "+19001234567" {
-		t.Fatalf("number=%s", ordered.Number)
-	}
-
-	code, err := client.Numbers().WaitCode(ctx, ordered.Tzid, onlinesim.WaitCodeOptions{
-		Interval:    0,
-		MaxAttempts: 5,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code != "654321" {
-		t.Fatalf("code=%s", code)
-	}
+func TestLangDevIDAndBaseWithoutSlash(t *testing.T) {
+	f := &fake{t: t, replies: []reply{ok(`{"response":"1","price":1}`)}}
+	var host string
+	c := onlinesim.New("k",
+		onlinesim.WithBaseURL("https://api.test/api"),
+		onlinesim.WithLang("ru"),
+		onlinesim.WithDevID(42),
+		onlinesim.WithHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+			host = r.URL.Host
+			return f.RoundTrip(r)
+		})}),
+	)
+	_, err := c.Numbers().Price(ctx, "vkcom", 7)
+	must(t, err)
+	call := f.last()
+	eq(t, host+call.path, "api.test/api/getPrice.php")
+	eq(t, call.lang, "ru")
+	eq(t, call.query["dev_id"], "42")
 }
 
-func TestNoNumber(t *testing.T) {
-	m := mock.Start()
-	defer m.Close()
-	m.FailNoNumber("telegram")
-
-	_, err := m.Client().Numbers().Get(context.Background(), onlinesim.GetNumberParams{Service: "telegram"})
-	var noNum *onlinesim.NoNumberError
-	if !errors.As(err, &noNum) {
-		t.Fatalf("want NoNumberError, got %v", err)
-	}
+func TestNoAuthorizationWithoutKey(t *testing.T) {
+	f := &fake{t: t, replies: []reply{ok(`{"response":"1","price":1}`)}}
+	c := onlinesim.New("", onlinesim.WithHTTPClient(&http.Client{Transport: f}))
+	_, err := c.Numbers().Price(ctx, "vkcom", 7)
+	must(t, err)
+	eq(t, f.last().header.Get("Authorization"), "")
 }
 
-func TestWaitCodeTimeout(t *testing.T) {
-	m := mock.Start()
-	defer m.Close()
-	m.ScriptSMS(mock.SmsScript{
-		Service:         "telegram",
-		Code:            "1",
-		PollsBeforeCode: 100,
-	})
-	client := m.Client()
-	ctx := context.Background()
-	tzid, err := client.Numbers().Get(ctx, onlinesim.GetNumberParams{Service: "telegram"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = client.Numbers().WaitCode(ctx, tzid, onlinesim.WaitCodeOptions{Interval: 0, MaxAttempts: 2})
-	if !errors.Is(err, onlinesim.ErrTimeout) {
-		t.Fatalf("want timeout, got %v", err)
-	}
+func TestDefaultBaseURL(t *testing.T) {
+	var got string
+	c := onlinesim.New("k", onlinesim.WithHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		got = r.URL.Scheme + "://" + r.URL.Host + r.URL.Path
+		return (&fake{t: t, replies: []reply{ok(`{"response":"1","price":1}`)}}).RoundTrip(r)
+	})}))
+	_, err := c.Numbers().Price(ctx, "vkcom", 7)
+	must(t, err)
+	eq(t, got, "https://onlinesim.host/api/getPrice.php")
 }
 
-func TestWebhookParse(t *testing.T) {
-	body := `{"user_id":"1","country_code":1,"number":"+19001234567","sender":"Telegram","message":"code 123456","time_start":"2026-01-01 00:00:00","time_left":10,"operation_id":1000,"webhook_type":"receiving_sms","code":"123456"}`
-	p, err := onlinesim.ParseWebhookJSON([]byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Code != "123456" || p.UserID != 1 {
-		t.Fatalf("%+v", p)
-	}
-
-	wrapped := `{"data":` + body + `}`
-	p2, err := onlinesim.ParseWebhookJSON([]byte(wrapped))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p2.Code != "123456" {
-		t.Fatalf("%+v", p2)
-	}
-}
-
-func TestFreeAndRent(t *testing.T) {
-	m := mock.Start()
-	defer m.Close()
-	client := m.Client()
-	ctx := context.Background()
-
-	countries, err := client.Free().Countries(ctx)
-	if err != nil || len(countries) == 0 {
-		t.Fatalf("countries: %v %v", countries, err)
-	}
-
-	item, err := client.Rent().Get(ctx, onlinesim.GetRentParams{Country: 1, Days: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if item.Tzid == 0 {
-		t.Fatal("empty tzid")
-	}
-}
-
-func TestBanUsesSetOperationOk(t *testing.T) {
-	m := mock.Start()
-	defer m.Close()
-	m.ScriptSMS(mock.SmsScript{Service: "telegram", Code: "1"})
-
-	client := m.Client()
-	ctx := context.Background()
-	tzid, err := client.Numbers().Get(ctx, onlinesim.GetNumberParams{Service: "telegram"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := client.Numbers().Ban(ctx, tzid); err != nil {
-		t.Fatal(err)
-	}
-	list, err := client.Numbers().State(ctx, onlinesim.StateParams{MsgList: true, Clean: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, st := range list {
-		if st.Tzid == tzid {
-			t.Fatalf("banned tzid still in state: %+v", st)
+func TestNoNumberIsNoNumberErrorAndAPIError(t *testing.T) {
+	for _, code := range []string{"NO_NUMBER", "NO_NUMBER_FOR_FORWARD"} {
+		c, _ := fakeClient(t, []reply{ok(`{"response":"` + code + `"}`)})
+		_, err := c.Numbers().Get(ctx, "google", 44)
+		var noNum *onlinesim.NoNumberError
+		if !errors.As(err, &noNum) {
+			t.Fatalf("want *NoNumberError, got %T %v", err, err)
+		}
+		e := apiErr(t, err, code)
+		if code == "NO_NUMBER" {
+			eq(t, e.Message, "No numbers available for this service right now")
 		}
 	}
 }
 
-func TestTariffDecodeLiveShapes(t *testing.T) {
-	cases := []struct {
-		name string
-		raw  string
-		want float64
-		keys int
-	}{
-		{
-			name: "map numeric",
-			raw:  `{"name":"Russia","position":1,"code":7,"new":false,"enabled":true,"services":{"telegram":{"count":1,"popular":true,"price":12.5,"id":1,"service":"telegram","slug":"telegram"}}}`,
-			want: 12.5,
-			keys: 1,
-		},
-		{
-			name: "string price and empty array",
-			raw:  `{"name":"X","position":1,"code":1,"new":false,"enabled":true,"services":[]}`,
-			want: 0,
-			keys: 0,
-		},
-		{
-			name: "string price in map",
-			raw:  `{"name":"Russia","position":1,"code":7,"new":false,"enabled":true,"services":{"telegram":{"count":1,"popular":true,"price":"12.50","id":1,"service":"telegram","slug":"telegram"}}}`,
-			want: 12.5,
-			keys: 1,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var got onlinesim.TariffCountryOne
-			if err := json.Unmarshal([]byte(tc.raw), &got); err != nil {
-				t.Fatal(err)
-			}
-			if len(got.Services) != tc.keys {
-				t.Fatalf("services=%d want %d", len(got.Services), tc.keys)
-			}
-			if tc.keys > 0 && got.Services["telegram"].Price != tc.want {
-				t.Fatalf("price=%v want %v", got.Services["telegram"].Price, tc.want)
-			}
-		})
+func TestHTTP456WrongKeyIsAPIErrorNotTransport(t *testing.T) {
+	c, _ := fakeClient(t, []reply{{status: 456, body: `{"response":"ERROR_WRONG_KEY"}`}})
+	_, err := c.User().Balance(ctx)
+	e := apiErr(t, err, "ERROR_WRONG_KEY")
+	eq(t, e.Message, "Wrong API key")
+	var te *onlinesim.TransportError
+	eq(t, errors.As(err, &te), false)
+}
+
+func TestServerMessageUnlessItEchoesTheCode(t *testing.T) {
+	c, _ := fakeClient(t, []reply{
+		ok(`{"response":"TRY_AGAIN_LATER","message":"Maintenance until 12:00"}`),
+		ok(`{"response":"UNDEFINED_COUNTRY","message":"UNDEFINED_COUNTRY"}`),
+		ok(`{"response":"SOMETHING_NEW"}`),
+	})
+	for _, want := range [][2]string{
+		{"TRY_AGAIN_LATER", "Maintenance until 12:00"},
+		{"UNDEFINED_COUNTRY", "Unknown country"},
+		{"SOMETHING_NEW", "SOMETHING_NEW"},
+	} {
+		_, err := c.Numbers().Get(ctx, "x", 7)
+		eq(t, apiErr(t, err, want[0]).Message, want[1])
 	}
 }
 
-func TestSetWebhook(t *testing.T) {
-	m := mock.Start()
-	defer m.Close()
-	client := m.Client()
-	ctx := context.Background()
-	url := "https://example.com/hook"
-	if err := client.User().SetWebhookURL(ctx, &url); err != nil {
+func TestValidationObjectIsValidationError(t *testing.T) {
+	c, _ := fakeClient(t, []reply{ok(`{"response":{"webhook_url":["The webhook url must be a valid URL.","Too long."],"name":["Required."]}}`)})
+	err := c.User().SetWebhookURL(ctx, "nope")
+	eq(t, apiErr(t, err, "VALIDATION_ERROR").Message, "The webhook url must be a valid URL.; Too long.; Required.")
+}
+
+func TestNonJSONIsTransportErrorWithStatusAndBody(t *testing.T) {
+	c, _ := fakeClient(t, []reply{{status: 502, body: "<html>Bad gateway</html>"}})
+	_, err := c.User().Balance(ctx)
+	var te *onlinesim.TransportError
+	if !errors.As(err, &te) {
+		t.Fatalf("want *TransportError, got %T %v", err, err)
+	}
+	eq(t, te.Status, 502)
+	eq(t, te.Body, "<html>Bad gateway</html>")
+}
+
+func TestBodyExcerptIs500Bytes(t *testing.T) {
+	c, _ := fakeClient(t, []reply{{status: 200, body: strings.Repeat("x", 2000)}})
+	_, err := c.User().Balance(ctx)
+	var te *onlinesim.TransportError
+	if !errors.As(err, &te) {
 		t.Fatal(err)
 	}
-	profile, err := client.User().Profile(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if profile.WebhookURL == nil || *profile.WebhookURL != url {
-		t.Fatalf("webhook=%v", profile.WebhookURL)
+	eq(t, len(te.Body), 500)
+}
+
+func TestJSONErrorStatusWithoutResponseIsTransportError(t *testing.T) {
+	c, _ := fakeClient(t, []reply{{status: 500, body: `{"error":"boom"}`}})
+	_, err := c.User().Balance(ctx)
+	var te *onlinesim.TransportError
+	if !errors.As(err, &te) || te.Status != 500 {
+		t.Fatalf("want TransportError 500, got %v", err)
 	}
 }
+
+func TestNetworkFailureIsTransportErrorWithoutStatus(t *testing.T) {
+	cause := errors.New("connection reset")
+	c, _ := fakeClient(t, []reply{{err: cause}})
+	_, err := c.User().Balance(ctx)
+	var te *onlinesim.TransportError
+	if !errors.As(err, &te) {
+		t.Fatalf("want *TransportError, got %T %v", err, err)
+	}
+	eq(t, te.Status, 0)
+	eq(t, errors.Is(err, cause), true)
+}
+
+// The transport blocks until the request context ends: the per-request timeout is the only way out.
+func TestRequestTimeoutIsTransportError(t *testing.T) {
+	block := roundTrip(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+	c := onlinesim.New("k", onlinesim.WithTimeout(time.Millisecond), onlinesim.WithHTTPClient(&http.Client{Transport: block}))
+	_, err := c.User().Balance(ctx)
+	var te *onlinesim.TransportError
+	if !errors.As(err, &te) {
+		t.Fatalf("want *TransportError, got %T %v", err, err)
+	}
+	eq(t, errors.Is(err, context.DeadlineExceeded), true)
+	eq(t, te.Error(), "onlinesim: request timed out after 1ms")
+}
+
+func TestCanceledContextIsTransportErrorWrappingCanceled(t *testing.T) {
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	block := roundTrip(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+	c := onlinesim.New("k", onlinesim.WithHTTPClient(&http.Client{Transport: block}))
+	_, err := c.User().Balance(canceled)
+	var te *onlinesim.TransportError
+	eq(t, errors.As(err, &te), true)
+	eq(t, errors.Is(err, context.Canceled), true)
+}
+
+func TestBodiesWithoutResponseAreReturnedAsIs(t *testing.T) {
+	c, _ := fakeClient(t, []reply{ok(`[]`)})
+	list, err := c.Numbers().State(ctx, onlinesim.StateOptions{})
+	must(t, err)
+	eq(t, list, []onlinesim.Operation{})
+}
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

@@ -1,5 +1,11 @@
 *.iml
 .idea/
+.DS_Store
 /.env
-/node_modules
-/vendor/
+
+# docs site (standalone package in docs/)
+/docs/node_modules
+/docs/.nuxt
+/docs/.output
+/docs/.data
+/docs/dist

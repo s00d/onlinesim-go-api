@@ -2,111 +2,105 @@ package onlinesim
 
 import (
 	"context"
-	"strconv"
+	"encoding/json"
+	"net/url"
 )
 
-// FreeAPI covers free public numbers and messages.
-type FreeAPI struct{ c *Client }
+// FreeAPI: public free numbers, client.Free(). No key needed.
+type FreeAPI struct {
+	do doFunc
+}
 
-// FreeCountry is a country entry from the free list.
+// FreeListOptions selects what List returns. Zero fields are not sent (server defaults).
+type FreeListOptions struct {
+	// Country code; server default 44.
+	Country int
+	// Number without the country code, as the keys of FreeList.Numbers.
+	Number string
+	// Page of Messages.
+	Page int
+	// Count is the number of SMS per page, 10-500.
+	Count int
+}
+
+// FreeCountry is a country with free numbers.
 type FreeCountry struct {
 	Country         int    `json:"country"`
 	CountryText     string `json:"country_text"`
-	CountryOriginal string `json:"country_original,omitempty"`
+	CountryOriginal string `json:"country_original"`
 }
 
-// FreeNumber is a free phone number.
+// FreeNumber is a free number.
 type FreeNumber struct {
-	Maxdate     string `json:"maxdate"`
-	Number      string `json:"number"`
-	Country     int    `json:"country"`
-	UpdatedAt   string `json:"updated_at"`
-	DataHumans  string `json:"data_humans"`
-	FullNumber  string `json:"full_number"`
-	CountryText string `json:"country_text"`
+	Country         int    `json:"country"`
+	CountryOriginal string `json:"country_original"`
+	FullNumber      string `json:"full_number"`
+	DataHumans      string `json:"data_humans"`
+	IsArchive       bool   `json:"is_archive"`
 }
 
-// FreeMessage is a free SMS message.
+// FreeMessage is an SMS of a free number.
 type FreeMessage struct {
-	Text       string `json:"text"`
-	InNumber   string `json:"in_number"`
-	MyNumber   any    `json:"my_number"`
+	ID   int64  `json:"id"`
+	Text string `json:"text"`
+	// InNumber is the sender.
+	InNumber string `json:"in_number"`
+	MyNumber string `json:"my_number"`
+	// Code is "-" when no code was found.
+	Code       string `json:"code"`
 	CreatedAt  string `json:"created_at"`
 	DataHumans string `json:"data_humans"`
 }
 
-// FreeListNumber is a number entry inside FreeList.
-type FreeListNumber struct {
-	Country         int    `json:"country"`
-	CountryOriginal string `json:"country_original"`
-	DataHumans      string `json:"data_humans"`
-	FullNumber      string `json:"full_number"`
-	IsArchive       bool   `json:"is_archive"`
+// FreeMessages is the page of SMS of the selected number.
+type FreeMessages struct {
+	Paginator[FreeMessage]
+	Number  string `json:"number"`
+	Country int    `json:"country"`
 }
 
-// FreeListMessages is the messages page inside FreeList.
-type FreeListMessages struct {
-	CurrentPage int           `json:"current_page"`
-	From        int           `json:"from"`
-	LastPage    int           `json:"last_page"`
-	PerPage     int           `json:"per_page"`
-	To          int           `json:"to"`
-	Total       int           `json:"total"`
-	Number      string        `json:"number"`
-	Country     int           `json:"country"`
-	Data        []FreeMessage `json:"data"`
+// FreeList is the result of List.
+type FreeList struct {
+	Countries []FreeCountry `json:"countries"`
+	// Numbers is keyed by the number without the country code.
+	Numbers  map[string]FreeNumber `json:"numbers"`
+	Messages FreeMessages          `json:"messages"`
 }
 
-// FreeListResponse is the getFreeList payload.
-type FreeListResponse struct {
-	Countries []FreeCountry             `json:"countries"`
-	Numbers   map[string]FreeListNumber `json:"numbers"`
-	Messages  FreeListMessages          `json:"messages"`
-}
-
-// Countries returns free countries.
-func (a *FreeAPI) Countries(ctx context.Context) ([]FreeCountry, error) {
-	var resp struct {
-		Response  any           `json:"response"`
-		Countries []FreeCountry `json:"countries"`
+// UnmarshalJSON accepts numbers as `[]`.
+func (l *FreeList) UnmarshalJSON(b []byte) error {
+	type plain FreeList
+	var v struct {
+		*plain
+		Numbers phpMap[FreeNumber] `json:"numbers"`
 	}
-	err := a.c.tr.GetJSON(ctx, "getFreeCountryList", map[string]string{}, true, &resp)
-	return resp.Countries, err
+	v.plain = (*plain)(l)
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	l.Numbers = v.Numbers
+	if l.Numbers == nil {
+		l.Numbers = map[string]FreeNumber{}
+	}
+	return nil
 }
 
-// Numbers returns free numbers for a country.
-func (a *FreeAPI) Numbers(ctx context.Context, country int) ([]FreeNumber, error) {
-	var resp struct {
-		Response any          `json:"response"`
-		Numbers  []FreeNumber `json:"numbers"`
+// List returns the countries, the numbers of the selected country and the SMS of the selected number.
+func (a *FreeAPI) List(ctx context.Context, opts FreeListOptions) (FreeList, error) {
+	q := url.Values{}
+	if opts.Country != 0 {
+		q.Set("country", itoa(opts.Country))
 	}
-	err := a.c.tr.GetJSON(ctx, "getFreePhoneList", map[string]string{
-		"country": strconv.Itoa(country),
-	}, true, &resp)
-	return resp.Numbers, err
-}
-
-// Messages returns free messages for a phone (page defaults to 1).
-func (a *FreeAPI) Messages(ctx context.Context, phone int64, page int) ([]FreeMessage, error) {
-	if page <= 0 {
-		page = 1
+	if opts.Number != "" {
+		q.Set("number", opts.Number)
 	}
-	var resp struct {
-		Response any `json:"response"`
-		Messages struct {
-			Data []FreeMessage `json:"data"`
-		} `json:"messages"`
+	if opts.Page != 0 {
+		q.Set("page", itoa(opts.Page))
 	}
-	err := a.c.tr.GetJSON(ctx, "getFreeMessageList", map[string]string{
-		"phone": strconv.FormatInt(phone, 10),
-		"page":  strconv.Itoa(page),
-	}, true, &resp)
-	return resp.Messages.Data, err
-}
-
-// FreeList returns the combined free list snapshot.
-func (a *FreeAPI) FreeList(ctx context.Context) (FreeListResponse, error) {
-	var resp FreeListResponse
-	err := a.c.tr.GetJSON(ctx, "getFreeList", map[string]string{}, true, &resp)
-	return resp, err
+	if opts.Count != 0 {
+		q.Set("count", itoa(opts.Count))
+	}
+	var res FreeList
+	err := a.do(ctx, "getFreeList", q, nil, &res)
+	return res, err
 }

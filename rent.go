@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"strconv"
+	"net/url"
 )
 
-// RentAPI covers long-term number rent.
-type RentAPI struct{ c *Client }
+// RentAPI: rented numbers, client.Rent(). A rent keeps a number for days and receives every SMS sent to it.
+type RentAPI struct {
+	do doFunc
+}
 
-// RentMessage is an SMS inside a rent operation.
-type RentMessage struct {
+// RentSMS is one SMS of a rent.
+type RentSMS struct {
 	ID        int64  `json:"id"`
 	Service   string `json:"service"`
 	Text      string `json:"text"`
@@ -20,160 +21,183 @@ type RentMessage struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// RentItem is an active or newly created rent.
+// RentItem is a rent operation.
 type RentItem struct {
-	Tzid      int64         `json:"tzid"`
-	Status    int           `json:"status"`
-	Messages  []RentMessage `json:"messages"`
-	Country   int           `json:"country"`
-	Rent      int           `json:"rent"`
-	Extension int           `json:"extension"`
-	Sum       any           `json:"sum"`
-	Number    string        `json:"number"`
-	Time      int64         `json:"time"`
-	Days      int           `json:"days"`
-	Hours     int           `json:"hours"`
-	Extend    any           `json:"extend"`
-	Checked   bool          `json:"checked"`
-	Reload    int           `json:"reload"`
-	DayExtend any           `json:"day_extend"`
+	Tzid    int64  `json:"tzid"`
+	Status  int    `json:"status"`
+	Number  string `json:"number"`
+	Country int    `json:"country"`
+	// Sum is the price paid, USD (parsed from the server's decimal string).
+	Sum   float64 `json:"sum"`
+	Days  int     `json:"days"`
+	Hours int     `json:"hours"`
+	// Time is the number of minutes left.
+	Time int `json:"time"`
+	// TimeSeconds is the number of seconds left.
+	TimeSeconds                   int64 `json:"time_seconds"`
+	GuardIntervalRemainingSeconds int   `json:"guard_interval_remaining_seconds"`
+	// Extension: 0 not extendable, 1 extendable, 2 auto-extension.
+	Extension      int    `json:"extension"`
+	DaysAutoextend int    `json:"days_autoextend"`
+	Rent           int    `json:"rent"`
+	StartTime      string `json:"start_time"`
+	StopTime       string `json:"stop_time"`
+	CheckedTime    string `json:"checked_time"`
+	Checked        bool   `json:"checked"`
+	Freeze         bool   `json:"freeze"`
+	Reload         int    `json:"reload"`
+	MExt           bool   `json:"m_ext"`
+	// DayExtend is the price of one day of extension; 0 when not configured.
+	DayExtend float64 `json:"day_extend"`
+	// Extend maps days to the extension price; empty when not extendable.
+	Extend     map[string]float64 `json:"extend"`
+	WebhookURL string             `json:"webhook_url"`
+	// Messages are the SMS, newest first.
+	Messages []RentSMS `json:"messages"`
 }
 
-// RentTariff is rent pricing for a country.
+// UnmarshalJSON parses the decimal-string sum and accepts extend as `[]`.
+func (r *RentItem) UnmarshalJSON(b []byte) error {
+	type plain RentItem
+	var v struct {
+		*plain
+		Sum    lenientFloat    `json:"sum"`
+		Extend phpMap[float64] `json:"extend"`
+	}
+	v.plain = (*plain)(r)
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	r.Sum = float64(v.Sum)
+	r.Extend = v.Extend
+	if r.Extend == nil {
+		r.Extend = map[string]float64{}
+	}
+	if r.Messages == nil {
+		r.Messages = []RentSMS{}
+	}
+	return nil
+}
+
+// RentTariff is the rent prices of one country.
 type RentTariff struct {
-	Code     int                `json:"code"`
-	Enabled  bool               `json:"enabled"`
-	Name     string             `json:"name"`
-	New      bool               `json:"new"`
-	Position int                `json:"position"`
-	Count    map[string]float64 `json:"count"`
-	Days     map[string]float64 `json:"days"`
-	Extend   float64            `json:"extend"`
+	Code     int     `json:"code"`
+	Name     string  `json:"name"`
+	Enabled  bool    `json:"enabled"`
+	New      bool    `json:"new"`
+	Position int     `json:"position"`
+	Extend   float64 `json:"extend"`
+	Confirm  bool    `json:"confirm"`
+	// Days maps rent days to the price, USD.
+	Days map[string]float64 `json:"days"`
+	// Count maps rent days to the numbers available.
+	Count     map[string]int `json:"count"`
+	ExtCounts map[string]int `json:"ext_counts"`
 }
 
-// GetRentParams configures a rent order.
-type GetRentParams struct {
-	Country int
-	Days    int
-	// Extension: nil defaults to true (Laravel/Rust); use BoolPtr(false) to disable.
-	Extension *bool
+// UnmarshalJSON accepts the maps as `[]`.
+func (t *RentTariff) UnmarshalJSON(b []byte) error {
+	type plain RentTariff
+	var v struct {
+		*plain
+		Days      phpMap[float64] `json:"days"`
+		Count     phpMap[int]     `json:"count"`
+		ExtCounts phpMap[int]     `json:"ext_counts"`
+	}
+	v.plain = (*plain)(t)
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	t.Days, t.Count, t.ExtCounts = v.Days, v.Count, v.ExtCounts
+	return nil
 }
 
-// BoolPtr returns a pointer to v.
-func BoolPtr(v bool) *bool { return &v }
-
-// Get orders a rent number.
-func (a *RentAPI) Get(ctx context.Context, p GetRentParams) (RentItem, error) {
-	if p.Country == 0 {
-		p.Country = DefaultCountry
-	}
-	if p.Days <= 0 {
-		p.Days = 1
-	}
-	ext := true
-	if p.Extension != nil {
-		ext = *p.Extension
-	}
-	var resp struct {
-		Response any      `json:"response"`
-		Item     RentItem `json:"item"`
-	}
-	err := a.c.tr.GetJSON(ctx, "rent/getRentNum", map[string]string{
-		"country":    strconv.Itoa(p.Country),
-		"days":       strconv.Itoa(p.Days),
-		"extension":  strconv.FormatBool(ext),
-		"pagination": "false",
-	}, true, &resp)
-	return resp.Item, err
+// rentDetail adds the parameters every rent read sends: a flat `messages` list and `time_seconds`.
+func rentDetail(q url.Values) url.Values {
+	q.Set("pagination", "0")
+	q.Set("number", "1")
+	return q
 }
 
-// State lists active rents.
+// Get rents a number in country for days days. extension=false makes the rent non-extendable for good
+// (the server default, and the usual choice, is true).
+func (a *RentAPI) Get(ctx context.Context, country, days int, extension bool) (RentItem, error) {
+	q := rentDetail(url.Values{"country": {itoa(country)}, "days": {itoa(days)}, "extension": {boolParam(extension)}})
+	var res struct {
+		Item RentItem `json:"item"`
+	}
+	err := a.do(ctx, "rent/getRentNum.php", q, nil, &res)
+	return res.Item, err
+}
+
+// State returns all rents of the account.
 func (a *RentAPI) State(ctx context.Context) ([]RentItem, error) {
-	var resp struct {
-		Response any        `json:"response"`
-		List     []RentItem `json:"list"`
+	var res struct {
+		List []RentItem `json:"list"`
 	}
-	err := a.c.tr.GetJSON(ctx, "rent/getRentState", map[string]string{
-		"pagination": "false",
-	}, true, &resp)
-	return resp.List, err
+	if err := a.do(ctx, "rent/getRentState.php", rentDetail(url.Values{}), nil, &res); err != nil {
+		return nil, err
+	}
+	if res.List == nil {
+		return []RentItem{}, nil
+	}
+	return res.List, nil
 }
 
-// StateOne returns one rent by tzid.
+// StateOne returns one rent, or *APIError ERROR_NO_OPERATIONS when it does not exist.
 func (a *RentAPI) StateOne(ctx context.Context, tzid int64) (RentItem, error) {
-	var resp struct {
-		Response any        `json:"response"`
-		List     []RentItem `json:"list"`
+	var res struct {
+		List []RentItem `json:"list"`
 	}
-	err := a.c.tr.GetJSON(ctx, "rent/getRentState", map[string]string{
-		"tzid":       strconv.FormatInt(tzid, 10),
-		"pagination": "false",
-	}, true, &resp)
-	if err != nil {
+	if err := a.do(ctx, "rent/getRentState.php", rentDetail(tzidParam(tzid)), nil, &res); err != nil {
 		return RentItem{}, err
 	}
-	if len(resp.List) == 0 {
-		return RentItem{}, fmt.Errorf("no rent for tzid %d", tzid)
+	if len(res.List) == 0 {
+		return RentItem{}, newAPIError("ERROR_NO_OPERATIONS", "")
 	}
-	return resp.List[0], nil
+	return res.List[0], nil
 }
 
-// Extend extends a rent by days.
+// Extend extends a rent by days days (only rents created with extension=true).
 func (a *RentAPI) Extend(ctx context.Context, tzid int64, days int) (RentItem, error) {
-	if days <= 0 {
-		days = 1
+	q := tzidParam(tzid)
+	q.Set("days", itoa(days))
+	var res struct {
+		Item RentItem `json:"item"`
 	}
-	var resp struct {
-		Response any      `json:"response"`
-		Item     RentItem `json:"item"`
-	}
-	err := a.c.tr.GetJSON(ctx, "rent/extendRentState", map[string]string{
-		"tzid": strconv.FormatInt(tzid, 10),
-		"days": strconv.Itoa(days),
-	}, true, &resp)
-	return resp.Item, err
+	err := a.do(ctx, "rent/extendRentState.php", rentDetail(q), nil, &res)
+	return res.Item, err
 }
 
-// PortReload reloads the rent port.
-func (a *RentAPI) PortReload(ctx context.Context, tzid int64) error {
-	return a.c.tr.GetJSON(ctx, "rent/portReload", map[string]string{
-		"tzid": strconv.FormatInt(tzid, 10),
-	}, true, nil)
-}
-
-// Tariffs returns rent tariffs for all countries.
+// Tariffs returns the rent prices of every country, keyed by country code. No key needed.
 func (a *RentAPI) Tariffs(ctx context.Context) (map[string]RentTariff, error) {
-	out := map[string]RentTariff{}
-	err := a.c.tr.GetJSON(ctx, "rent/tariffsRent", map[string]string{}, true, &out)
-	return out, err
+	var res phpMap[RentTariff]
+	if err := a.do(ctx, "rent/tariffsRent.php", nil, nil, &res); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
-// TariffsOne returns rent tariff for one country.
+// TariffsOne returns the rent prices of one country, or *APIError NO_COUNTRY for a country without rent.
+// No key needed.
 func (a *RentAPI) TariffsOne(ctx context.Context, country int) (RentTariff, error) {
-	if country == 0 {
-		country = DefaultCountry
-	}
 	var raw json.RawMessage
-	err := a.c.tr.GetJSON(ctx, "rent/tariffsRent", map[string]string{
-		"country": strconv.Itoa(country),
-	}, true, &raw)
-	if err != nil {
+	if err := a.do(ctx, "rent/tariffsRent.php", url.Values{"country": {itoa(country)}}, nil, &raw); err != nil {
 		return RentTariff{}, err
 	}
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || string(trimmed) == "null" || (len(trimmed) > 0 && trimmed[0] == '[') {
-		return RentTariff{}, fmt.Errorf("no rent tariff for country %d", country)
+	// An unknown country answers `[]`.
+	var probe map[string]json.RawMessage
+	if t := bytes.TrimSpace(raw); len(t) == 0 || t[0] != '{' || json.Unmarshal(t, &probe) != nil || probe["code"] == nil {
+		return RentTariff{}, newAPIError("NO_COUNTRY", "")
 	}
-	var out RentTariff
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return RentTariff{}, fmt.Errorf("decode rent tariff: %w", err)
+	var res RentTariff
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return RentTariff{}, &TransportError{Err: err, msg: "unexpected response shape: " + err.Error()}
 	}
-	return out, nil
+	return res, nil
 }
 
-// Close closes a rent.
+// Close returns the number before the rent period ends.
 func (a *RentAPI) Close(ctx context.Context, tzid int64) error {
-	return a.c.tr.GetJSON(ctx, "rent/closeRentNum", map[string]string{
-		"tzid": strconv.FormatInt(tzid, 10),
-	}, true, nil)
+	return a.do(ctx, "rent/closeRentNum.php", tzidParam(tzid), nil, nil)
 }

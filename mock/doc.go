@@ -1,5 +1,5 @@
-// Package mock provides a local OnlineSim HTTP mock for unit tests and
-// offline integration — no real numbers, no paid API calls.
+// Package mock is a local OnlineSim HTTP mock for tests and offline runs: no real numbers,
+// no paid calls. It checks paths and the Bearer key like the real API.
 //
 //	m := mock.Start()
 //	defer m.Close()

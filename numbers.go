@@ -5,457 +5,285 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"strconv"
+	"net/url"
 	"strings"
 )
 
-// NumbersAPI covers temporary SMS number operations.
-type NumbersAPI struct{ c *Client }
-
-// GetNumberParams configures a number order.
-type GetNumberParams struct {
-	Service   string
-	Country   int
-	Reject    []int
-	Extension bool
-	Number    bool // when true, ask API to return number in response
+// NumbersAPI: numbers for receiving SMS, client.Numbers(). An operation (tzid) is one ordered number.
+type NumbersAPI struct {
+	do doFunc
 }
 
-// StateParams configures getState polling.
-type StateParams struct {
-	// MessageToCode controls code extraction. nil defaults to 1; use IntPtr(0) for full message.
-	MessageToCode *int
-	OrderBy       string // ASC / DESC
-	MsgList       bool
-	Clean         bool
-	Repeat        bool
-	Tzid          int64
+// OperationStatus is the state of a number operation (Operation.Response).
+type OperationStatus string
+
+// Operation states.
+const (
+	TZInPool       OperationStatus = "TZ_INPOOL"      // number being assigned
+	TZNumWait      OperationStatus = "TZ_NUM_WAIT"    // waiting for an SMS
+	TZNumAnswer    OperationStatus = "TZ_NUM_ANSWER"  // an SMS arrived
+	TZOverOK       OperationStatus = "TZ_OVER_OK"     // finished
+	TZErrorNoItems OperationStatus = "ERROR_NO_ITEMS" // failed
+)
+
+// Order is the sort order of State.
+type Order string
+
+// Sort orders.
+const (
+	OrderAsc  Order = "asc"
+	OrderDesc Order = "desc"
+)
+
+// Operation is a number operation (a getState item).
+type Operation struct {
+	Tzid     int64           `json:"tzid"`
+	Response OperationStatus `json:"response"`
+	Number   string          `json:"number"`
+	Service  string          `json:"service"`
+	Country  int             `json:"country"`
+	Sum      float64         `json:"sum"`
+	// Time is the number of seconds left.
+	Time                  int    `json:"time"`
+	Form                  string `json:"form"`
+	SubscriptionPackageID int64  `json:"subscription_package_id"`
+	WebhookURL            string `json:"webhook_url"`
+	// Msg is empty until the first SMS arrives.
+	Msg    OperationMsg `json:"msg"`
+	Extend int          `json:"extend"`
+	// GuardIntervalRemainingSeconds: seconds until the operation may be closed without an SMS.
+	GuardIntervalRemainingSeconds int `json:"guard_interval_remaining_seconds"`
 }
 
-// IntPtr returns a pointer to v (for optional int params).
-func IntPtr(v int) *int { return &v }
-
-// NumberWithTz is returned by GetWithNumber.
-type NumberWithTz struct {
-	Tzid                           int64  `json:"tzid"`
-	Number                         string `json:"number"`
-	Country                        int    `json:"country"`
-	Time                           *int64 `json:"time,omitempty"`
-	Service                        string `json:"service,omitempty"`
-	Title                          string `json:"title,omitempty"`
-	Response                       string `json:"response,omitempty"`
-	GuardIntervalRemainingSeconds  *int64 `json:"guard_interval_remaining_seconds,omitempty"`
+// OperationMsg is Operation.msg: the code (or full text with FullMessage) in Text,
+// or every SMS in List when MsgList is set.
+type OperationMsg struct {
+	Text string
+	List []OperationSMS
 }
 
-// StateOne is a single operation from getState.
-type StateOne struct {
-	Tzid                          int64           `json:"tzid"`
-	Response                      string          `json:"response"`
-	Number                        string          `json:"number"`
-	Service                       string          `json:"service"`
-	Time                          int64           `json:"time"`
-	Msg                           json.RawMessage `json:"msg,omitempty"`
-	Country                       int             `json:"country"`
-	Sum                           float64         `json:"sum,omitempty"`
-	Form                          json.RawMessage `json:"form,omitempty"`
-	ResponseText                  string          `json:"response_text,omitempty"`
-	Title                         string          `json:"title,omitempty"`
-	GuardIntervalRemainingSeconds *int64          `json:"guard_interval_remaining_seconds,omitempty"`
-}
-
-// MsgString extracts a string code/message from Msg.
-func (s StateOne) MsgString() string {
-	if len(s.Msg) == 0 || string(s.Msg) == "null" {
-		return ""
+// UnmarshalJSON accepts a string, a number, a list of SMS, false or null.
+func (m *OperationMsg) UnmarshalJSON(b []byte) error {
+	*m = OperationMsg{}
+	if t := bytes.TrimSpace(b); len(t) > 0 && t[0] == '[' {
+		return json.Unmarshal(t, &m.List)
 	}
-	var str string
-	if err := json.Unmarshal(s.Msg, &str); err == nil {
-		return str
-	}
-	var num json.Number
-	if err := json.Unmarshal(s.Msg, &num); err == nil {
-		return num.String()
-	}
-	var arr []struct {
-		Service string `json:"service"`
-		Msg     string `json:"msg"`
-	}
-	if err := json.Unmarshal(s.Msg, &arr); err == nil && len(arr) > 0 {
-		return arr[0].Msg
-	}
-	return strings.Trim(string(s.Msg), `"`)
-}
-
-// TariffService is a service row inside country tariffs.
-type TariffService struct {
-	Count   any     `json:"count"`
-	Popular bool    `json:"popular"`
-	Code    int     `json:"code"`
-	Price   float64 `json:"price"`
-	ID      any     `json:"id"`
-	Service any     `json:"service"`
-	Slug    any     `json:"slug"`
-}
-
-// UnmarshalJSON accepts live price as number or number_format string.
-func (s *TariffService) UnmarshalJSON(data []byte) error {
-	type alias TariffService
-	var raw struct {
-		alias
-		Price json.RawMessage `json:"price"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	*s = TariffService(raw.alias)
-	price, err := parseFlexFloat(raw.Price)
-	if err != nil {
-		return err
-	}
-	s.Price = price
+	m.Text = str(b)
 	return nil
 }
 
-// TariffCountryOne is tariffs for one country.
-type TariffCountryOne struct {
-	Name     string                   `json:"name"`
-	Position int                      `json:"position"`
-	Code     int                      `json:"code"`
-	Other    any                      `json:"other"`
-	New      bool                     `json:"new"`
-	Enabled  bool                     `json:"enabled"`
-	Services map[string]TariffService `json:"services"`
+// OperationSMS is one SMS of an operation when MsgList is set.
+type OperationSMS struct {
+	Service string `json:"service"`
+	Msg     string `json:"msg"`
+	Text    string `json:"text"`
+	Code    string `json:"code"`
 }
 
-// UnmarshalJSON accepts services as object map or empty JSON array.
-func (c *TariffCountryOne) UnmarshalJSON(data []byte) error {
-	var raw struct {
-		Name     string          `json:"name"`
-		Position int             `json:"position"`
-		Code     int             `json:"code"`
-		Other    any             `json:"other"`
-		New      bool            `json:"new"`
-		Enabled  bool            `json:"enabled"`
-		Services json.RawMessage `json:"services"`
+// NumberOrder is the result of GetWithNumber.
+type NumberOrder struct {
+	Tzid int64 `json:"tzid"`
+	// Number is the full number with "+", e.g. "+447459608320".
+	Number  string `json:"number"`
+	Country int    `json:"country"`
+	// Time is the number of seconds left.
+	Time                          int    `json:"time"`
+	Service                       string `json:"service"`
+	Title                         string `json:"title"`
+	GuardIntervalRemainingSeconds int    `json:"guard_interval_remaining_seconds"`
+}
+
+// StateOptions configures State and StateOne. The zero value is the default for every field.
+type StateOptions struct {
+	// FullMessage: Msg holds the full SMS text instead of the code (message_to_code=0).
+	FullMessage bool
+	// OrderBy is the order of State; "" means OrderAsc. Ignored by StateOne.
+	OrderBy Order
+	// MsgList: Msg.List holds every SMS of the operation (msg_list=1).
+	MsgList bool
+}
+
+// ServiceStat is a service of a country in the tariffs.
+type ServiceStat struct {
+	// Count is the number of numbers in stock, -1 when the server reports "?" (unknown).
+	Count   int     `json:"count"`
+	Popular bool    `json:"popular"`
+	Code    int     `json:"code"`
+	Price   float64 `json:"price"`
+	ID      int64   `json:"id"`
+	// Service is the display name.
+	Service string `json:"service"`
+	// Slug is the service id for Get and Price.
+	Slug string `json:"slug"`
+}
+
+// UnmarshalJSON accepts count "?" and numbers sent as strings.
+func (s *ServiceStat) UnmarshalJSON(b []byte) error {
+	type plain ServiceStat
+	var v struct {
+		*plain
+		Count json.RawMessage `json:"count"`
+		Price lenientFloat    `json:"price"`
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
+	v.plain = (*plain)(s)
+	if err := json.Unmarshal(b, &v); err != nil {
 		return err
 	}
-	c.Name = raw.Name
-	c.Position = raw.Position
-	c.Code = raw.Code
-	c.Other = raw.Other
-	c.New = raw.New
-	c.Enabled = raw.Enabled
-	c.Services = map[string]TariffService{}
-	if len(raw.Services) == 0 || string(raw.Services) == "null" {
-		return nil
+	s.Price = float64(v.Price)
+	if n, ok := num(v.Count); ok {
+		s.Count = int(n)
+	} else {
+		s.Count = -1
 	}
-	trimmed := bytes.TrimSpace(raw.Services)
-	if len(trimmed) > 0 && trimmed[0] == '[' {
-		var list []TariffService
-		if err := json.Unmarshal(raw.Services, &list); err != nil {
-			return err
-		}
-		for i, svc := range list {
-			key := serviceKey(svc, i)
-			if key != "" {
-				c.Services[key] = svc
-			}
-		}
-		return nil
-	}
-	return json.Unmarshal(raw.Services, &c.Services)
+	return nil
 }
 
-func serviceKey(svc TariffService, i int) string {
-	switch v := svc.Slug.(type) {
-	case string:
-		if v != "" {
-			return v
-		}
-	}
-	switch v := svc.Service.(type) {
-	case string:
-		if v != "" {
-			return v
-		}
-	}
-	return strconv.Itoa(i)
+// CountryStat is the services, prices and stock of one country.
+type CountryStat struct {
+	Name       string `json:"name"`
+	LocaleName string `json:"locale_name"`
+	Position   int    `json:"position"`
+	Code       int    `json:"code"`
+	// Other is the price of other services, 0 when not set.
+	Other   float64 `json:"other"`
+	New     bool    `json:"new"`
+	Enabled bool    `json:"enabled"`
+	// Services maps "service_<slug>" to the service; empty when the country has none.
+	Services map[string]ServiceStat `json:"services"`
 }
 
-func parseFlexFloat(raw json.RawMessage) (float64, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return 0, nil
+// UnmarshalJSON accepts services as `[]` and other as false.
+func (c *CountryStat) UnmarshalJSON(b []byte) error {
+	type plain CountryStat
+	var v struct {
+		*plain
+		Other    lenientFloat        `json:"other"`
+		Services phpMap[ServiceStat] `json:"services"`
 	}
-	var f float64
-	if err := json.Unmarshal(raw, &f); err == nil {
-		return f, nil
+	v.plain = (*plain)(c)
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
 	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		if s == "" {
-			return 0, nil
-		}
-		return strconv.ParseFloat(s, 64)
+	c.Other = float64(v.Other)
+	c.Services = v.Services
+	if c.Services == nil {
+		c.Services = map[string]ServiceStat{}
 	}
-	var n json.Number
-	if err := json.Unmarshal(raw, &n); err == nil {
-		return n.Float64()
-	}
-	return 0, fmt.Errorf("expected number, got %s", string(raw))
+	return nil
 }
 
-// Price returns the price for a service in a country.
-func (a *NumbersAPI) Price(ctx context.Context, service string, country int) (float64, error) {
-	if country == 0 {
-		country = DefaultCountry
+// Price returns the price (USD) of one number of service in country; nil when the country has no price for it.
+func (a *NumbersAPI) Price(ctx context.Context, service string, country int) (*float64, error) {
+	var res struct {
+		Price *float64 `json:"price"`
 	}
-	var resp struct {
-		Response any             `json:"response"`
-		Price    json.RawMessage `json:"price"`
+	q := url.Values{"service": {service}, "country": {itoa(country)}}
+	if err := a.do(ctx, "getPrice.php", q, nil, &res); err != nil {
+		return nil, err
 	}
-	err := a.c.tr.GetJSON(ctx, "getPrice", map[string]string{
-		"service": service,
-		"country": strconv.Itoa(country),
-	}, true, &resp)
-	if err != nil {
-		return 0, err
-	}
-	if len(resp.Price) == 0 || string(resp.Price) == "null" {
-		return 0, nil
-	}
-	return parseFlexFloat(resp.Price)
+	return res.Price, nil
 }
 
-// Get orders a number and returns tzid.
-func (a *NumbersAPI) Get(ctx context.Context, p GetNumberParams) (int64, error) {
-	res, err := a.getRaw(ctx, p)
-	if err != nil {
+// Get orders a number and returns the operation id (tzid). reject lists number prefixes to skip, e.g. "4470".
+func (a *NumbersAPI) Get(ctx context.Context, service string, country int, reject ...string) (int64, error) {
+	var res struct {
+		Tzid int64 `json:"tzid"`
+	}
+	if err := a.do(ctx, "getNum.php", getNumQuery(service, country, reject), nil, &res); err != nil {
 		return 0, err
 	}
 	return res.Tzid, nil
 }
 
-// GetWithNumber orders a number and returns tzid + phone metadata.
-func (a *NumbersAPI) GetWithNumber(ctx context.Context, p GetNumberParams) (NumberWithTz, error) {
-	p.Number = true
-	return a.getRaw(ctx, p)
+// GetWithNumber orders a number and returns it right away together with the operation id.
+func (a *NumbersAPI) GetWithNumber(ctx context.Context, service string, country int, reject ...string) (NumberOrder, error) {
+	q := getNumQuery(service, country, reject)
+	q.Set("number", "1") // a presence flag on getNum: sent here only
+	var res NumberOrder
+	err := a.do(ctx, "getNum.php", q, nil, &res)
+	return res, err
 }
 
-func (a *NumbersAPI) getRaw(ctx context.Context, p GetNumberParams) (NumberWithTz, error) {
-	if p.Country == 0 {
-		p.Country = DefaultCountry
+func getNumQuery(service string, country int, reject []string) url.Values {
+	q := url.Values{"service": {service}, "country": {itoa(country)}}
+	if len(reject) > 0 {
+		q.Set("reject", strings.Join(reject, ","))
 	}
-	service := strings.TrimPrefix(p.Service, "service_")
-	params := map[string]string{
-		"service":   service,
-		"country":   strconv.Itoa(p.Country),
-		"extension": strconv.FormatBool(p.Extension),
-	}
-	if p.Number {
-		params["number"] = "true"
-	}
-	if len(p.Reject) > 0 {
-		parts := make([]string, len(p.Reject))
-		for i, v := range p.Reject {
-			parts[i] = strconv.Itoa(v)
-		}
-		params["reject"] = strings.Join(parts, ",")
-	}
-	var resp struct {
-		Response any    `json:"response"`
-		Tzid     int64  `json:"tzid"`
-		Number   string `json:"number"`
-		Country  int    `json:"country"`
-		Time     *int64 `json:"time"`
-		Service  string `json:"service"`
-		Title    string `json:"title"`
-	}
-	if err := a.c.tr.GetJSON(ctx, "getNum", params, true, &resp); err != nil {
-		return NumberWithTz{}, err
-	}
-	country := resp.Country
-	if country == 0 {
-		country = p.Country
-	}
-	return NumberWithTz{
-		Tzid:    resp.Tzid,
-		Number:  resp.Number,
-		Country: country,
-		Time:    resp.Time,
-		Service: resp.Service,
-		Title:   resp.Title,
-	}, nil
+	return q
 }
 
-// State lists active operations.
-func (a *NumbersAPI) State(ctx context.Context, p StateParams) ([]StateOne, error) {
-	p = p.withDefaults()
-	params := stateQuery(p)
-	if p.Repeat {
-		params["type"] = "repeat"
-	} else {
-		params["type"] = "index"
+// State returns all operations of the account; an empty slice when there are none.
+func (a *NumbersAPI) State(ctx context.Context, opts StateOptions) ([]Operation, error) {
+	order := opts.OrderBy
+	if order == "" {
+		order = OrderAsc
 	}
-	var list []StateOne
-	if err := a.c.tr.GetJSON(ctx, "getState", params, true, &list); err != nil {
-		if errors.Is(err, ErrNoOperations) {
-			return []StateOne{}, nil
+	q := stateQuery(opts)
+	q.Set("orderby", string(order))
+	list := []Operation{}
+	if err := a.do(ctx, "getState.php", q, nil, &list); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Code == "ERROR_NO_OPERATIONS" {
+			return []Operation{}, nil
 		}
 		return nil, err
 	}
 	return list, nil
 }
 
-// StateOne returns a single operation by tzid.
-func (a *NumbersAPI) StateOne(ctx context.Context, tzid int64, p StateParams) (StateOne, error) {
-	p = p.withDefaults()
-	p.Tzid = tzid
-	params := stateQuery(p)
-	if p.Repeat {
-		params["type"] = "repeat"
-	} else {
-		params["type"] = "index"
-	}
-	params["tzid"] = strconv.FormatInt(tzid, 10)
-	var list []StateOne
-	if err := a.c.tr.GetJSON(ctx, "getState", params, true, &list); err != nil {
-		if errors.Is(err, ErrNoOperations) {
-			return StateOne{}, fmt.Errorf("no operation for tzid %d", tzid)
-		}
-		return StateOne{}, err
+// StateOne returns one operation, or *APIError ERROR_NO_OPERATIONS when it does not exist (any more).
+func (a *NumbersAPI) StateOne(ctx context.Context, tzid int64, opts StateOptions) (Operation, error) {
+	q := stateQuery(opts)
+	q.Set("tzid", tzidParam(tzid).Get("tzid"))
+	var list []Operation
+	if err := a.do(ctx, "getState.php", q, nil, &list); err != nil {
+		return Operation{}, err
 	}
 	if len(list) == 0 {
-		return StateOne{}, fmt.Errorf("no operation for tzid %d", tzid)
+		return Operation{}, newAPIError("ERROR_NO_OPERATIONS", "")
 	}
 	return list[0], nil
 }
 
-func (p StateParams) withDefaults() StateParams {
-	// Match JS defaults when caller passes a zero-value struct.
-	if p.MessageToCode == nil && !p.MsgList && !p.Clean && !p.Repeat && p.OrderBy == "" && p.Tzid == 0 {
-		p.MsgList = true
-		p.Clean = true
-	}
-	return p
-}
-
-func stateQuery(p StateParams) map[string]string {
-	msgToCode := 1
-	if p.MessageToCode != nil {
-		msgToCode = *p.MessageToCode
-	}
-	order := p.OrderBy
-	if order == "" {
-		order = "ASC"
-	}
-	msgList := "0"
-	if p.MsgList {
-		msgList = "1"
-	}
-	clean := "0"
-	if p.Clean {
-		clean = "1"
-	}
-	repeat := "0"
-	if p.Repeat {
-		repeat = "1"
-	}
-	return map[string]string{
-		"message_to_code": strconv.Itoa(msgToCode),
-		"orderby":         order,
-		"msg_list":        msgList,
-		"clean":           clean,
-		"repeat":          repeat,
+func stateQuery(opts StateOptions) url.Values {
+	return url.Values{
+		"message_to_code": {boolParam(!opts.FullMessage)},
+		"msg_list":        {boolParam(opts.MsgList)},
+		"number":          {"1"}, // adds guard_interval_remaining_seconds
 	}
 }
 
-// Next revises the operation to wait for another SMS.
+// Next switches the operation to its next SMS and keeps it open.
 func (a *NumbersAPI) Next(ctx context.Context, tzid int64) error {
-	var resp struct {
-		Response any `json:"response"`
-	}
-	return a.c.tr.GetJSON(ctx, "setOperationRevise", map[string]string{
-		"tzid": strconv.FormatInt(tzid, 10),
-	}, true, &resp)
+	return a.do(ctx, "setOperationRevise.php", tzidParam(tzid), nil, nil)
 }
 
-// Close completes the operation.
+// Close finishes the operation. Without an SMS it can be closed only after its guard interval
+// (NO_COMPLETE_TZID before that); every attempt locks the tzid for 5 s on the server
+// (INTERVAL_CONCURRENT_REQUESTS_ERROR for a repeat). The client does not retry: retry after 5 s yourself.
 func (a *NumbersAPI) Close(ctx context.Context, tzid int64) error {
-	return a.setOperationOk(ctx, tzid, false)
+	return a.do(ctx, "setOperationOk.php", tzidParam(tzid), nil, nil)
 }
 
-// Ban completes the operation and bans the number (setOperationOk?ban=1).
+// Ban finishes the operation and reports the number as bad (only before any SMS arrived).
 func (a *NumbersAPI) Ban(ctx context.Context, tzid int64) error {
-	return a.setOperationOk(ctx, tzid, true)
+	q := tzidParam(tzid)
+	q.Set("ban", "1")
+	return a.do(ctx, "setOperationOk.php", q, nil, nil)
 }
 
-func (a *NumbersAPI) setOperationOk(ctx context.Context, tzid int64, ban bool) error {
-	var resp struct {
-		Response any `json:"response"`
+// Tariffs returns the services, prices and stock of every country, keyed by country code. No key needed.
+func (a *NumbersAPI) Tariffs(ctx context.Context) (map[string]CountryStat, error) {
+	var res phpMap[CountryStat]
+	if err := a.do(ctx, "getNumbersStats.php", url.Values{"country": {"all"}}, nil, &res); err != nil {
+		return nil, err
 	}
-	params := map[string]string{
-		"tzid": strconv.FormatInt(tzid, 10),
-	}
-	if ban {
-		params["ban"] = "1"
-	}
-	return a.c.tr.GetJSON(ctx, "setOperationOk", params, true, &resp)
+	return res, nil
 }
 
-// Repeat starts a repeated reception for a number.
-//
-// Note: production OnlineSim may not expose getNumRepeat (demo-only in some
-// deployments). Prefer a fresh Get when unsure.
-func (a *NumbersAPI) Repeat(ctx context.Context, service string, number int64) (int64, error) {
-	var resp struct {
-		Response any   `json:"response"`
-		Tzid     int64 `json:"tzid"`
-	}
-	err := a.c.tr.GetJSON(ctx, "getNumRepeat", map[string]string{
-		"service": service,
-		"number":  strconv.FormatInt(number, 10),
-	}, true, &resp)
-	return resp.Tzid, err
-}
-
-// Tariffs returns tariffs for all countries.
-func (a *NumbersAPI) Tariffs(ctx context.Context) (map[string]TariffCountryOne, error) {
-	out := map[string]TariffCountryOne{}
-	err := a.c.tr.GetJSON(ctx, "getNumbersStats", map[string]string{"country": "all"}, true, &out)
-	return out, err
-}
-
-// TariffsOne returns tariffs for one country.
-func (a *NumbersAPI) TariffsOne(ctx context.Context, country int) (TariffCountryOne, error) {
-	if country == 0 {
-		country = DefaultCountry
-	}
-	var out TariffCountryOne
-	err := a.c.tr.GetJSON(ctx, "getNumbersStats", map[string]string{
-		"country": strconv.Itoa(country),
-	}, true, &out)
-	return out, err
-}
-
-// Service returns available service slugs.
-func (a *NumbersAPI) Service(ctx context.Context) ([]string, error) {
-	var resp struct {
-		Response any      `json:"response"`
-		Service  []string `json:"service"`
-	}
-	err := a.c.tr.GetJSON(ctx, "getService", map[string]string{}, true, &resp)
-	return resp.Service, err
-}
-
-// ServiceNumber returns numbers available for repeated reception.
-func (a *NumbersAPI) ServiceNumber(ctx context.Context, service string) ([]string, error) {
-	var resp struct {
-		Response any      `json:"response"`
-		Number   []string `json:"number"`
-	}
-	err := a.c.tr.GetJSON(ctx, "getServiceNumber", map[string]string{"service": service}, true, &resp)
-	return resp.Number, err
+// TariffsOne returns the services, prices and stock of one country. No key needed.
+func (a *NumbersAPI) TariffsOne(ctx context.Context, country int) (CountryStat, error) {
+	var res CountryStat
+	err := a.do(ctx, "getNumbersStats.php", url.Values{"country": {itoa(country)}}, nil, &res)
+	return res, err
 }

@@ -1,36 +1,31 @@
+// The order → code → close flow on the local mock, offline: go run ./examples/mock_sms_flow
 package main
 
 import (
 	"context"
 	"fmt"
+	"log"
+	"time"
 
-	onlinesim "github.com/s00d/onlinesim-go-api/v2"
-	"github.com/s00d/onlinesim-go-api/v2/mock"
+	onlinesim "github.com/s00d/onlinesim-go-api/v3"
+	"github.com/s00d/onlinesim-go-api/v3/mock"
 )
 
 func main() {
 	m := mock.Start()
 	defer m.Close()
-	m.ScriptSMS(mock.SmsScript{
-		Service:         "telegram",
-		Number:          "+19001234567",
-		Code:            "123456",
-		PollsBeforeCode: 1,
-	})
+	m.ScriptSMS(mock.SmsScript{Service: "telegram", Number: "+19001234567", Code: "123456", PollsBeforeCode: 1})
 
 	client := m.Client()
 	ctx := context.Background()
 
-	ordered, err := client.Numbers().GetWithNumber(ctx, onlinesim.GetNumberParams{Service: "telegram"})
+	order, err := client.Numbers().GetWithNumber(ctx, "telegram", 1)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
-	code, err := client.Numbers().WaitCode(ctx, ordered.Tzid, onlinesim.WaitCodeOptions{
-		Interval:    0,
-		MaxAttempts: 5,
-	})
+	code, err := client.Numbers().WaitCode(ctx, order.Tzid, onlinesim.WaitCodeOptions{Interval: 100 * time.Millisecond})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
-	fmt.Printf("number=%s code=%s\n", ordered.Number, code)
+	fmt.Printf("number=%s code=%s\n", order.Number, code)
 }
