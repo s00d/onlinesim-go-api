@@ -9,3 +9,6 @@
 /docs/.output
 /docs/.data
 /docs/dist
+
+# local lint tools (GOBIN=$PWD/.tools/bin go install ...)
+/.tools/

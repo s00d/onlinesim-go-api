@@ -115,21 +115,19 @@ case err != nil:
 
 ## Testing
 
-Inject a fake transport with `WithHTTPClient`, or run the bundled local mock (`github.com/s00d/onlinesim-go-api/v3/mock`), which checks paths and the Bearer key like the real API:
+The bundled mock (`github.com/s00d/onlinesim-go-api/v3/mock`) answers like the real API in-process, so your tests need no network, key or money:
 
 ```go
-m := mock.Start()
-defer m.Close()
-m.ScriptSMS(mock.SmsScript{Service: "telegram", Code: "123456", PollsBeforeCode: 1})
-
+m := mock.New(mock.WithBalance(10))
 client := m.Client()
-tzid, err := client.Numbers().Get(ctx, "telegram", 1)
+tzid, err := client.Numbers().Get(ctx, "google", 44)
 if err != nil {
 	return err
 }
+_ = m.AddSMSAfter(tzid, "Your code: 123-456", 2) // arrives on the third poll
 noSleep := func(context.Context, time.Duration) error { return nil }
 code, err := client.Numbers().WaitCode(ctx, tzid, onlinesim.WaitCodeOptions{Sleep: noSleep})
 fmt.Println(code, err) // 123456 <nil>
 ```
 
-Mock helpers: `ScriptSMS`, `FailNoNumber`, `FailBalance`, `SetBalance`, `AddRentSMS`, `NewBuilder().StatePath(path)` (persist state across runs), `Client()`, `BaseURL()`.
+More in [Testing](/testing).

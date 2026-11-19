@@ -4,6 +4,7 @@ on:
   push:
     branches: [master]
   pull_request:
+  workflow_call:
 
 jobs:
   test:
@@ -33,6 +34,10 @@ jobs:
       - name: test
         run: go test -race -count=1 ./...
 
+      # The module as `go get` downloads it (a git archive), in an empty module, offline: the README "Testing" example.
+      - name: smoke from artifact
+        run: ./scripts/smoke-artifact.sh
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -45,3 +50,15 @@ jobs:
       - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.14.0
+
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+
+      - name: go mod tidy
+        run: go mod tidy -diff
+
+      - name: go mod verify
+        run: go mod verify

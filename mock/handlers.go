@@ -1,323 +1,565 @@
 package mock
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
+
+	onlinesim "github.com/s00d/onlinesim-go-api/v3"
 )
 
-// Handlers run under m.mu and return the HTTP status and the JSON body.
+// The mock's routes: endpoint path (relative to `/api/`) → handler. A handler gets the state and the request
+// and returns the JSON body the real backend would send (HTTP 200). Shapes follow the OpenAPI spec and the
+// live captures: `response` as int or string per endpoint, decimal-string money, `[]` for empty maps.
+// Auth, queued failures, 456 and 404 are the transport's job (mock.go), not the handlers'.
 
-func ok(fields map[string]any) (int, any) {
-	out := map[string]any{"response": "1"}
-	for k, v := range fields {
-		out[k] = v
-	}
-	return http.StatusOK, out
+type obj = map[string]any
+
+type handler func(s *state, r *Request) any
+
+var routes = map[string]handler{
+	"getPrice.php":             getPrice,
+	"getNum.php":               getNum,
+	"getState.php":             getState,
+	"setOperationRevise.php":   setOperationRevise,
+	"setOperationOk.php":       setOperationOk,
+	"getNumbersStats.php":      getNumbersStats,
+	"rent/getRentNum.php":      getRentNum,
+	"rent/getRentState.php":    getRentState,
+	"rent/extendRentState.php": extendRentState,
+	"rent/closeRentNum.php":    closeRentNum,
+	"rent/tariffsRent.php":     tariffsRent,
+	"getBalance.php":           getBalance,
+	"getProfile.php":           getProfile,
+	"profile.php":              profile,
+	"webhook-logs":             webhookLogs,
+	"getPaymentHistory.php":    getPaymentHistory,
+	"getFreeList":              getFreeList,
 }
 
-func fail(code string) (int, any) {
-	return http.StatusOK, map[string]any{"response": code}
+// publicPaths answer without a key.
+var publicPaths = map[string]bool{"getNumbersStats.php": true, "rent/tariffsRent.php": true, "getFreeList": true}
+
+var countryNames = map[int][2]string{
+	7:  {"russia", "Russia"},
+	44: {"united_kingdom", "United Kingdom"},
 }
 
-func tzidOf(r *http.Request) int64 {
-	id, _ := strconv.ParseInt(r.URL.Query().Get("tzid"), 10, 64)
-	return id
+func countryName(code int) (name, locale string) {
+	if n, ok := countryNames[code]; ok {
+		return n[0], n[1]
+	}
+	return fmt.Sprintf("country_%d", code), fmt.Sprintf("Country %d", code)
 }
 
-func emptyPage() map[string]any {
-	return map[string]any{"current_page": 1, "data": []any{}, "from": nil, "to": nil, "last_page": 1, "per_page": 10, "total": 0}
+func apiError(code string) any { return obj{"response": code} }
+
+// flag is a presence flag: set and not "0".
+func flag(r *Request, key string) bool {
+	v, ok := r.Query[key]
+	return ok && v != "0"
 }
 
-func (m *Server) handleBalance(_ *http.Request) (int, any) {
-	if code := m.state.balanceError; code != "" {
-		m.state.balanceError = ""
-		return fail(code)
+func intParam(r *Request, key string, fallback int) int {
+	n, err := strconv.Atoi(r.Query[key])
+	if err != nil {
+		return fallback
 	}
-	// Like the real API: balance is a decimal string, zbalance and income are numbers.
-	return ok(map[string]any{"balance": fmt.Sprintf("%.3f", m.state.Balance), "zbalance": m.state.Zbalance, "income": m.state.Income})
+	return n
 }
 
-func (m *Server) handleProfile(_ *http.Request) (int, any) {
-	return ok(map[string]any{"profile": map[string]any{
-		"id": 1, "name": "mock", "username": "mock", "email": "mock@example.com",
-		"locale": "en", "currency": "USD", "api_access": true, "number_reject": []string{},
-		"webhook_url": m.state.WebhookURL,
-	}})
+func tzidParam(r *Request, fallback int64) int64 {
+	n, err := strconv.ParseInt(r.Query["tzid"], 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
-func (m *Server) handleSetProfile(r *http.Request) (int, any) {
-	var body struct {
-		Profile map[string]*string `json:"profile"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		return fail("ERROR_PARAMS")
-	}
-	hook, present := body.Profile["webhook_url"]
-	if !present {
-		return ok(nil)
-	}
-	if hook != nil {
-		u, err := url.ParseRequestURI(*hook)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return http.StatusOK, map[string]any{"response": map[string]any{"webhook_url": []string{"The webhook url must be a valid URL."}}}
-		}
-	}
-	m.state.WebhookURL = hook
-	return ok(map[string]any{"user": map[string]any{"id": 1}})
+// decimal is USD as a decimal string, as the backend sends `balance` (3 digits) and rent `sum` (2 digits).
+func decimal(mills int64, digits int) string {
+	return strconv.FormatFloat(fromMills(mills), 'f', digits, 64)
 }
 
-func (m *Server) handleWebhookLogs(_ *http.Request) (int, any) {
-	return ok(map[string]any{"data": emptyPage()})
-}
-
-func (m *Server) handlePaymentHistory(_ *http.Request) (int, any) {
-	return ok(map[string]any{"orders": emptyPage(), "paylist": []any{}})
-}
-
-func (m *Server) handlePrice(r *http.Request) (int, any) {
-	service := r.URL.Query().Get("service")
-	if service == "" {
-		return fail("ERROR_NO_SERVICE")
+// paginate is a Laravel paginator over items.
+func paginate[T any](items []T, page, perPage int, path string) obj {
+	if page < 1 {
+		page = 1
 	}
-	price := DefaultSmsScript().Price
-	for _, s := range m.state.scripts {
-		if s.Service == service {
-			price = s.Price
-			break
-		}
+	if perPage < 1 {
+		perPage = 10
 	}
-	return ok(map[string]any{"price": price})
-}
-
-func (m *Server) handleGetNum(r *http.Request) (int, any) {
-	q := r.URL.Query()
-	service := q.Get("service")
-	if service == "" {
-		return fail("ERROR_NO_SERVICE")
+	total := len(items)
+	lastPage := max(1, (total+perPage-1)/perPage)
+	from, to := min((page-1)*perPage, total), min(page*perPage, total)
+	data := append([]T{}, items[from:to]...)
+	pageURL := func(p int) string { return fmt.Sprintf("https://onlinesim.host/api/%s?page=%d", path, p) }
+	out := obj{
+		"current_page": page, "data": data, "first_page_url": pageURL(1), "from": nil, "last_page": lastPage,
+		"last_page_url": pageURL(lastPage), "links": []any{}, "next_page_url": nil,
+		"path": "https://onlinesim.host/api/" + path, "per_page": perPage, "prev_page_url": nil, "to": nil, "total": total,
 	}
-	if m.state.noNumberFor[service] {
-		return fail("NO_NUMBER")
+	if len(data) > 0 {
+		out["from"], out["to"] = from+1, to
 	}
-	script := DefaultSmsScript()
-	script.Service = service
-	if c, err := strconv.Atoi(q.Get("country")); err == nil && c > 0 {
-		script.Country = c
+	if page < lastPage {
+		out["next_page_url"] = pageURL(page + 1)
 	}
-	for i, s := range m.state.scripts {
-		if s.Service == service {
-			script = s
-			m.state.scripts = append(m.state.scripts[:i], m.state.scripts[i+1:]...)
-			break
-		}
-	}
-
-	tzid := m.state.nextTzid()
-	m.state.ops[tzid] = operation{
-		Service: script.Service, Number: script.Number, Country: script.Country,
-		Code: script.Code, PollsBeforeCode: script.PollsBeforeCode,
-	}
-	out := map[string]any{"tzid": tzid}
-	if q.Has("number") { // a presence flag, like the real API
-		out["number"], out["country"], out["service"], out["time"] = script.Number, script.Country, script.Service, 1200
-	}
-	return ok(out)
-}
-
-func (m *Server) handleGetState(r *http.Request) (int, any) {
-	q := r.URL.Query()
-	ids := make([]int64, 0, len(m.state.ops))
-	if q.Has("tzid") {
-		ids = append(ids, tzidOf(r))
-	} else {
-		for id := range m.state.ops {
-			ids = append(ids, id)
-		}
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	if q.Get("orderby") == "desc" {
-		sort.Slice(ids, func(i, j int) bool { return ids[i] > ids[j] })
-	}
-
-	list := []map[string]any{}
-	for _, id := range ids {
-		op, found := m.state.ops[id]
-		if !found || op.Closed {
-			continue
-		}
-		item := map[string]any{
-			"tzid": id, "response": "TZ_NUM_WAIT", "number": op.Number, "service": op.Service,
-			"country": op.Country, "sum": 0.3, "time": 600, "form": "index",
-		}
-		if q.Has("number") {
-			item["guard_interval_remaining_seconds"] = 0
-		}
-		op.Polls++
-		if op.Polls > op.PollsBeforeCode {
-			item["response"] = "TZ_NUM_ANSWER"
-			if q.Get("message_to_code") == "0" {
-				item["msg"] = "Your code is " + op.Code
-			} else {
-				item["msg"] = op.Code
-			}
-		}
-		m.state.ops[id] = op
-		list = append(list, item)
-	}
-	if len(list) == 0 {
-		return fail("ERROR_NO_OPERATIONS")
-	}
-	return http.StatusOK, list
-}
-
-func (m *Server) handleClose(r *http.Request) (int, any) {
-	tzid := tzidOf(r)
-	op, found := m.state.ops[tzid]
-	if !found || op.Closed {
-		return fail("ERROR_WRONG_TZID")
-	}
-	op.Closed = true
-	m.state.ops[tzid] = op
-	return ok(map[string]any{"tzid": tzid})
-}
-
-func (m *Server) handleRevise(r *http.Request) (int, any) {
-	tzid := tzidOf(r)
-	if op, found := m.state.ops[tzid]; found {
-		op.Polls = 0
-		m.state.ops[tzid] = op
-	}
-	return ok(map[string]any{"tzid": tzid}) // always succeeds, like the real API
-}
-
-var countryStats = map[string]map[string]any{
-	"1":  {"name": "usa", "locale_name": "USA", "position": 1, "code": 1, "other": false, "new": false, "enabled": true},
-	"44": {"name": "united_kingdom", "locale_name": "United Kingdom", "position": 3, "code": 44, "other": 0.63, "new": false, "enabled": true},
-}
-
-func countryStat(code string) map[string]any {
-	out := map[string]any{"services": map[string]any{
-		"service_telegram": map[string]any{"count": 10, "popular": true, "code": countryStats[code]["code"], "price": 10, "id": 1, "service": "Telegram", "slug": "telegram"},
-	}}
-	for k, v := range countryStats[code] {
-		out[k] = v
+	if page > 1 {
+		out["prev_page_url"] = pageURL(page - 1)
 	}
 	return out
 }
 
-func (m *Server) handleTariffs(r *http.Request) (int, any) {
-	country := r.URL.Query().Get("country")
-	if country == "all" {
-		all := map[string]any{}
-		for code := range countryStats {
-			all[code] = countryStat(code)
+// ----- numbers -----
+
+func msgOf(sms SMS, toCode bool) string {
+	if toCode && sms.Code != "" {
+		return sms.Code
+	}
+	return sms.Text
+}
+
+func operationView(s *state, op *Operation, r *Request) obj {
+	toCode := flag(r, "message_to_code")
+	open := op.Status != onlinesim.TZOverOK
+	view := obj{
+		"country": op.Country, "sum": op.Sum, "service": op.Service, "number": op.Number,
+		"subscription_package_id": nil, "webhook_url": s.webhookURL, "response": op.Status, "tzid": op.Tzid,
+		"time": 0, "form": "index",
+	}
+	if open {
+		view["time"] = operationTime
+	}
+	if flag(r, "msg_list") {
+		if len(op.Messages) > 0 {
+			list := make([]obj, len(op.Messages))
+			for i, sms := range op.Messages {
+				list[i] = obj{"service": sms.Service, "msg": msgOf(sms, toCode)}
+			}
+			view["msg"] = list
 		}
-		return http.StatusOK, all
+	} else if op.Cursor < len(op.Messages) {
+		view["msg"] = msgOf(op.Messages[op.Cursor], toCode)
 	}
-	if _, found := countryStats[country]; !found {
-		return fail("NO_COUNTRY")
+	if _, ok := r.Query["number"]; ok {
+		guard := 0
+		if open && len(op.Messages) == 0 {
+			guard = s.guardInterval
+		}
+		view["guard_interval_remaining_seconds"] = guard
 	}
-	return http.StatusOK, countryStat(country)
+	return view
 }
 
-var rentTariffs = map[string]map[string]any{
-	"7": {
-		"code": 7, "enabled": true, "name": "russia", "new": false, "position": 7, "extend": 1, "confirm": false,
-		"days": map[string]float64{"1": 5, "7": 9.11}, "count": map[string]int{"1": 10, "7": 10},
-	},
+func getPrice(s *state, r *Request) any {
+	prices, ok := s.prices[intParam(r, "country", 7)]
+	if !ok {
+		return apiError("UNDEFINED_COUNTRY")
+	}
+	var price any
+	if p, ok := prices[r.Query["service"]]; ok {
+		price = p
+	}
+	return obj{"response": "1", "price": price}
 }
 
-func (m *Server) handleRentTariffs(r *http.Request) (int, any) {
-	if !r.URL.Query().Has("country") {
-		return http.StatusOK, rentTariffs
+func getNum(s *state, r *Request) any {
+	country := intParam(r, "country", 7)
+	service := r.Query["service"]
+	prices, ok := s.prices[country]
+	if !ok {
+		return apiError("UNDEFINED_COUNTRY")
 	}
-	if t, found := rentTariffs[r.URL.Query().Get("country")]; found {
-		return http.StatusOK, t
+	price, ok := prices[service]
+	if !ok {
+		return apiError("ERROR_NO_SERVICE")
 	}
-	return http.StatusOK, []any{} // the real API answers [] for a country without rent
+	cost := toMills(price)
+	if s.available() < cost {
+		return apiError("WARNING_LOW_BALANCE")
+	}
+
+	digits := strconv.Itoa(country) + shortNumber(s.seq+1)
+	for _, prefix := range strings.Split(r.Query["reject"], ",") {
+		if prefix != "" && strings.HasPrefix(digits, prefix) {
+			return apiError("NO_NUMBER")
+		}
+	}
+
+	tzid := s.nextID()
+	s.frozen += cost
+	op := &Operation{Tzid: tzid, Service: service, Country: country, Number: "+" + digits, Sum: price, Status: onlinesim.TZNumWait}
+	s.operations[tzid] = op
+	if _, ok := r.Query["number"]; !ok {
+		return obj{"response": 1, "tzid": tzid}
+	}
+	return obj{"response": 1, "tzid": tzid, "number": op.Number, "country": country, "time": operationTime, "service": service}
 }
 
-func (m *Server) rentItem(tzid int64) map[string]any {
-	r := m.state.rents[tzid]
-	extension, extend := 0, any([]any{})
-	if r.Extension {
-		extension, extend = 1, map[string]float64{"1": 5, "7": 9.11}
-	}
-	return map[string]any{
-		"tzid": tzid, "status": 1, "number": r.Number, "country": r.Country, "sum": "5.00",
-		"days": r.Days, "hours": r.Days * 24, "time": r.Days * 24 * 60, "time_seconds": r.Days * 86400,
-		"extension": extension, "extend": extend, "rent": 1, "messages": r.Messages,
-		"start_time": "2026-01-01 00:00:00", "stop_time": "2026-01-02 00:00:00",
-	}
-}
-
-func (m *Server) handleRentGet(r *http.Request) (int, any) {
-	q := r.URL.Query()
-	if _, found := rentTariffs[q.Get("country")]; !found {
-		return fail("UNDEFINED_COUNTRY")
-	}
-	days, _ := strconv.Atoi(q.Get("days"))
-	if days <= 0 {
-		return fail("UNDEFINED_DAYS")
-	}
-	tzid := m.state.nextTzid()
-	country, _ := strconv.Atoi(q.Get("country"))
-	m.state.rents[tzid] = &rentOp{
-		Number: "79001112233", Country: country, Days: days,
-		Extension: q.Get("extension") != "0", Messages: []map[string]any{},
-	}
-	return ok(map[string]any{"item": m.rentItem(tzid)})
-}
-
-func (m *Server) handleRentState(r *http.Request) (int, any) {
-	ids := []int64{}
-	if r.URL.Query().Has("tzid") {
-		if _, found := m.state.rents[tzidOf(r)]; found {
-			ids = append(ids, tzidOf(r))
+func getState(s *state, r *Request) any {
+	var ops []*Operation
+	if _, ok := r.Query["tzid"]; ok {
+		if op, found := s.operations[tzidParam(r, -1)]; found {
+			ops = append(ops, op)
 		}
 	} else {
-		for id := range m.state.rents {
-			ids = append(ids, id)
+		ops = s.sortedOperations()
+	}
+	for _, op := range ops {
+		s.poll(op.Tzid)
+	}
+	if len(ops) == 0 {
+		return apiError("ERROR_NO_OPERATIONS")
+	}
+	if r.Query["orderby"] == "desc" {
+		sort.Slice(ops, func(i, j int) bool { return ops[i].Tzid > ops[j].Tzid })
+	}
+	list := make([]obj, len(ops))
+	for i, op := range ops {
+		list[i] = operationView(s, op, r)
+	}
+	return list
+}
+
+func setOperationRevise(s *state, r *Request) any {
+	tzid := tzidParam(r, 0)
+	// Always succeeds, even for unknown tzids, like the backend.
+	if op, ok := s.operations[tzid]; ok && op.Status != onlinesim.TZOverOK {
+		op.Cursor = len(op.Messages)
+		op.Status = onlinesim.TZNumWait
+	}
+	return obj{"response": 1, "tzid": tzid}
+}
+
+func setOperationOk(s *state, r *Request) any {
+	tzid := tzidParam(r, 0)
+	op, ok := s.operations[tzid]
+	if !ok || op.Status == onlinesim.TZOverOK {
+		return apiError("ERROR_WRONG_TZID")
+	}
+	received := len(op.Messages) > 0
+	if flag(r, "ban") && received {
+		return obj{"response": "0"}
+	}
+	if !received && s.guardInterval > 0 {
+		return apiError("NO_COMPLETE_TZID")
+	}
+	cost := toMills(op.Sum)
+	s.frozen -= cost
+	if received {
+		s.balance -= cost // spent; without an SMS the frozen price is refunded
+	}
+	op.Status = onlinesim.TZOverOK
+	return obj{"response": 1, "tzid": tzid}
+}
+
+func countryStat(s *state, code int) obj {
+	name, locale := countryName(code)
+	prices := s.prices[code]
+	slugs := make([]string, 0, len(prices))
+	for slug := range prices {
+		slugs = append(slugs, slug)
+	}
+	sort.Strings(slugs) // service ids follow the slug order: Go maps have none
+	var services any = []any{}
+	if len(slugs) > 0 {
+		m := obj{}
+		for i, slug := range slugs {
+			m["service_"+slug] = obj{"count": 100, "popular": false, "code": code, "price": prices[slug], "id": i + 1, "service": slug, "slug": slug}
 		}
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		services = m
 	}
-	list := make([]map[string]any, 0, len(ids))
-	for _, id := range ids {
-		list = append(list, m.rentItem(id))
+	return obj{
+		"name": name, "position": code, "code": code, "other": false, "new": false, "enabled": true,
+		"services": services, "locale_name": locale,
 	}
-	return ok(map[string]any{"list": list})
 }
 
-func (m *Server) handleRentExtend(r *http.Request) (int, any) {
-	rent, found := m.state.rents[tzidOf(r)]
-	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
-	if !found || !rent.Extension || days <= 0 {
-		return fail("TRY_AGAIN_LATER")
+func getNumbersStats(s *state, r *Request) any {
+	if r.Query["country"] == "all" {
+		if len(s.prices) == 0 {
+			return []any{}
+		}
+		all := obj{}
+		for code := range s.prices {
+			all[strconv.Itoa(code)] = countryStat(s, code)
+		}
+		return all
 	}
+	code := intParam(r, "country", 7)
+	if _, ok := s.prices[code]; !ok {
+		return apiError("NO_COUNTRY")
+	}
+	return countryStat(s, code)
+}
+
+// ----- rent -----
+
+func dayMap(days map[int]float64) obj {
+	out := obj{}
+	for d, price := range days {
+		out[strconv.Itoa(d)] = price
+	}
+	return out
+}
+
+func rentItem(s *state, rent *Rent, r *Request) obj {
+	tariff, ok := s.rentTariffs[rent.Country]
+	extendable := rent.Extension && ok && tariff.Extend == 1
+	messages := make([]obj, 0, len(rent.Messages))
+	for i := len(rent.Messages) - 1; i >= 0; i-- { // newest first
+		m := rent.Messages[i]
+		messages = append(messages, obj{"id": m.ID, "service": m.Service, "text": m.Text, "code": m.Code, "created_at": m.CreatedAt})
+	}
+	start := rent.Tzid
+	extension := 0
+	if rent.Extension {
+		extension = 1
+	}
+	var extend any = []any{}
+	dayExtend := 0.0
+	if extendable {
+		extend, dayExtend = dayMap(tariff.Days), tariff.Days[1]
+	}
+	item := obj{
+		"status": 1, "extension": extension, "messages": messages, "webhook_url": s.webhookURL,
+		"sum": decimal(toMills(rent.Sum), 2), "country": rent.Country,
+		"start_time": stamp(start), "stop_time": stamp(start + int64(rent.Days)*86_400), "checked_time": stamp(start),
+		"number": rent.Number, "days_autoextend": 0, "rent": 1, "tzid": rent.Tzid,
+		"time": rent.Days * 24 * 60, "days": rent.Days, "hours": rent.Days * 24,
+		"extend": extend, "checked": true, "reload": nil, "day_extend": dayExtend, "m_ext": false, "freeze": false,
+	}
+	if _, ok := r.Query["number"]; ok {
+		item["time_seconds"] = rent.Days * 86_400
+	}
+	return item
+}
+
+func getRentNum(s *state, r *Request) any {
+	country := intParam(r, "country", 7)
+	tariff, ok := s.rentTariffs[country]
+	if !ok {
+		return apiError("NO_COUNTRY")
+	}
+	days := intParam(r, "days", 1)
+	price, ok := tariff.Days[days]
+	if !ok {
+		return apiError("UNDEFINED_DAYS")
+	}
+	if s.available() < toMills(price) {
+		return apiError("WARNING_LOW_BALANCE")
+	}
+	tzid := s.nextID()
+	s.balance -= toMills(price)
+	rent := &Rent{
+		Tzid: tzid, Country: country, Number: shortNumber(tzid), Days: days, Sum: price,
+		// `extension` defaults to 1 on the server; `0` makes the rent non-extendable for good.
+		Extension: r.Query["extension"] != "0",
+	}
+	s.rents[tzid] = rent
+	return obj{"response": 1, "item": rentItem(s, rent, r)}
+}
+
+func getRentState(s *state, r *Request) any {
+	var rents []*Rent
+	if _, ok := r.Query["tzid"]; ok {
+		if rent, found := s.rents[tzidParam(r, -1)]; found {
+			rents = append(rents, rent)
+		}
+	} else {
+		rents = s.sortedRents()
+	}
+	list := make([]obj, len(rents))
+	for i, rent := range rents {
+		s.poll(rent.Tzid)
+		list[i] = rentItem(s, rent, r)
+	}
+	return obj{"response": 1, "list": list}
+}
+
+func extendRentState(s *state, r *Request) any {
+	rent, ok := s.rents[tzidParam(r, 0)]
+	if !ok {
+		return apiError("ERROR_WRONG_TZID")
+	}
+	tariff, ok := s.rentTariffs[rent.Country]
+	if !rent.Extension || !ok || tariff.Extend != 1 {
+		return apiError("TRY_AGAIN_LATER")
+	}
+	days := intParam(r, "days", 1)
+	price, ok := tariff.Days[days]
+	if !ok {
+		return apiError("UNDEFINED_DAYS")
+	}
+	if s.available() < toMills(price) {
+		return apiError("WARNING_LOW_BALANCE")
+	}
+	s.balance -= toMills(price)
 	rent.Days += days
-	return ok(map[string]any{"item": m.rentItem(tzidOf(r))})
+	rent.Sum = fromMills(toMills(rent.Sum) + toMills(price))
+	return obj{"response": 1, "item": rentItem(s, rent, r)}
 }
 
-func (m *Server) handleRentClose(r *http.Request) (int, any) {
-	if _, found := m.state.rents[tzidOf(r)]; !found {
-		return fail("ERROR_NO_OPERATIONS")
+func closeRentNum(s *state, r *Request) any {
+	tzid := tzidParam(r, 0)
+	if _, ok := s.rents[tzid]; !ok {
+		return apiError("ERROR_WRONG_TZID")
 	}
-	delete(m.state.rents, tzidOf(r))
-	return ok(nil)
+	delete(s.rents, tzid) // no refund
+	delete(s.scheduled, tzid)
+	return obj{"response": "1"}
 }
 
-func (m *Server) handleFreeList(_ *http.Request) (int, any) {
-	return ok(map[string]any{
-		"countries": []map[string]any{{"country": 44, "country_text": "United Kingdom", "country_original": "united_kingdom"}},
-		"numbers": map[string]any{"7459608320": map[string]any{
-			"country": 44, "country_original": "united_kingdom", "full_number": "447459608320", "data_humans": "1 day ago", "is_archive": false,
-		}},
-		"messages": map[string]any{
-			"current_page": 1, "from": 1, "to": 1, "last_page": 1, "per_page": 10, "total": 1, "number": "7459608320", "country": 44,
-			"data": []map[string]any{{"id": 1, "text": "Your code is 2991", "in_number": "Microsoft", "my_number": "7459608320", "code": "2991", "created_at": "2026-01-01T00:00:00.000000Z", "data_humans": "1 day ago"}},
+func tariffsRent(s *state, r *Request) any {
+	tariff := func(code int) any {
+		t, ok := s.rentTariffs[code]
+		if !ok {
+			return []any{}
+		}
+		name, _ := countryName(code)
+		count := obj{}
+		for d := range t.Days {
+			count[strconv.Itoa(d)] = 100
+		}
+		return obj{
+			"code": code, "enabled": true, "name": name, "new": false, "position": code, "count": count,
+			"days": dayMap(t.Days), "extend": t.Extend, "confirm": false, "ext_counts": count,
+		}
+	}
+	if _, ok := r.Query["country"]; ok {
+		return tariff(intParam(r, "country", 0))
+	}
+	if len(s.rentTariffs) == 0 {
+		return []any{}
+	}
+	all := obj{}
+	for code := range s.rentTariffs {
+		all[strconv.Itoa(code)] = tariff(code)
+	}
+	return all
+}
+
+// ----- user -----
+
+func getBalance(s *state, r *Request) any {
+	res := obj{"response": "1", "balance": decimal(s.balance, 3), "zbalance": fromMills(s.frozen)}
+	if _, ok := r.Query["income"]; ok {
+		res["income"], res["income_usd"] = 0, "0.000"
+	}
+	return res
+}
+
+func getProfile(s *state, _ *Request) any {
+	return obj{"response": "1", "profile": obj{
+		"id": userID, "hash_id": "mock", "name": "mock@example.com", "username": "mock@example.com",
+		"email": "mock@example.com", "email_verified_at": stamp(0), "active": "true", "apikey": s.apiKey,
+		"api_access": true, "is_api": true, "number": nil, "country": nil, "locale": "en", "currency": "USD",
+		"number_region": nil, "number_country": nil, "number_reject": []any{}, "ugroup": 1, "verify": 0, "block": 0,
+		"resetCount": nil, "created_at": stamp(0), "notification_at": nil, "first_login": false, "sub": 0,
+		"disable": false, "webhook_url": s.webhookURL, "is_project_subscription": false,
+	}}
+}
+
+func isHTTPURL(value string) bool {
+	u, err := url.Parse(value)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != ""
+}
+
+func profile(s *state, r *Request) any {
+	body, _ := r.Body.(obj)
+	p, ok := body["profile"].(obj)
+	if r.Method != "POST" || !ok {
+		return apiError("ERROR_PARAMS")
+	}
+	raw, present := p["webhook_url"]
+	if raw != nil {
+		u, isString := raw.(string)
+		if !isString || !isHTTPURL(u) {
+			// A validation error is HTTP 200 with the field messages in `response`.
+			return obj{"response": obj{"webhook_url": []string{"The webhook url must be a valid URL."}}}
+		}
+		s.webhookURL = &u
+	} else if present {
+		s.webhookURL = nil
+	}
+	return obj{"response": "1", "user": obj{"id": userID, "webhook_url": s.webhookURL}}
+}
+
+func webhookLogs(s *state, r *Request) any {
+	logs := make([]webhookLog, len(s.webhookLogs))
+	for i, l := range s.webhookLogs { // newest first
+		logs[len(logs)-1-i] = l
+	}
+	return obj{"response": "1", "data": paginate(logs, intParam(r, "page", 1), 10, "webhook-logs")}
+}
+
+func getPaymentHistory(_ *state, r *Request) any {
+	return obj{
+		"response": "1", "orders": paginate([]any{}, intParam(r, "page", 1), 10, "getPaymentHistory.php"),
+		"paylist": []any{}, "domains": []any{}, "currency": obj{"USD": 1},
+	}
+}
+
+// ----- free -----
+
+type freeCountry struct {
+	name, text string
+	numbers    map[string][][2]string // short number → [sender, text]
+}
+
+var freeData = map[int]freeCountry{
+	44: {name: "united_kingdom", text: "United Kingdom", numbers: map[string][][2]string{
+		"7459608320": {
+			{"Amazon", "Amazon: Use 195895 to reset your password."},
+			{"Microsoft", "Microsoft access code: 2991"},
 		},
-	})
+	}},
+	7: {name: "russia", text: "Russia", numbers: map[string][][2]string{
+		"9001234567": {{"Telegram", "Telegram code: 51423"}},
+	}},
+}
+
+func getFreeList(_ *state, r *Request) any {
+	codes := sortedKeys(freeData)
+	country := intParam(r, "country", 44)
+	data, ok := freeData[country]
+	if !ok {
+		country = codes[0]
+		data = freeData[country]
+	}
+	shorts := make([]string, 0, len(data.numbers))
+	numbers := obj{}
+	for n := range data.numbers {
+		shorts = append(shorts, n)
+		numbers[n] = obj{
+			"country": country, "country_original": data.name, "data_humans": "1 day ago",
+			"full_number": strconv.Itoa(country) + n, "is_archive": false,
+		}
+	}
+	sort.Strings(shorts)
+	number := r.Query["number"]
+	if _, ok := data.numbers[number]; !ok {
+		number = shorts[0]
+	}
+	messages := make([]obj, 0, len(data.numbers[number]))
+	for i, m := range data.numbers[number] {
+		code := extractCode(m[1])
+		if code == "" {
+			code = "-"
+		}
+		messages = append(messages, obj{
+			"id": i + 1, "text": m[1], "in_number": m[0], "my_number": number,
+			"created_at": stamp(int64(i)), "data_humans": "1 day ago", "code": code,
+		})
+	}
+	countries := make([]obj, len(codes))
+	for i, c := range codes {
+		countries[i] = obj{"country": c, "country_text": freeData[c].text, "country_original": freeData[c].name}
+	}
+	page := paginate(messages, intParam(r, "page", 1), intParam(r, "count", 10), "getFreeList")
+	page["number"], page["country"] = number, country
+	return obj{"response": 1, "countries": countries, "numbers": numbers, "messages": page}
 }
