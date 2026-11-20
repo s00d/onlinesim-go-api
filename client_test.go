@@ -64,17 +64,46 @@ func TestDefaultBaseURL(t *testing.T) {
 }
 
 func TestNoNumberIsNoNumberErrorAndAPIError(t *testing.T) {
-	for _, code := range []string{"NO_NUMBER", "NO_NUMBER_FOR_FORWARD"} {
+	c, _ := fakeClient(t, []reply{ok(`{"response":"NO_NUMBER"}`), ok(`{"response":"FORWARD_NOT_SUPPORTED"}`)})
+	_, err := c.Numbers().Get(ctx, "google", 44)
+	var noNum *onlinesim.NoNumberError
+	if !errors.As(err, &noNum) {
+		t.Fatalf("want *NoNumberError, got %T %v", err, err)
+	}
+	eq(t, apiErr(t, err, "NO_NUMBER").Message, "No numbers available for this service right now")
+
+	// Only NO_NUMBER is a NoNumberError.
+	_, err = c.Numbers().Get(ctx, "google", 44)
+	eq(t, errors.As(err, &noNum), false)
+	eq(t, apiErr(t, err, "FORWARD_NOT_SUPPORTED").Message, "Number forwarding is no longer available")
+}
+
+func TestHTTP429TryAgainLaterIsAPIErrorNotTransport(t *testing.T) {
+	c, _ := fakeClient(t, []reply{{status: 429, body: `{"response":"TRY_AGAIN_LATER"}`}})
+	_, err := c.Numbers().State(ctx, onlinesim.StateOptions{})
+	eq(t, apiErr(t, err, "TRY_AGAIN_LATER").Message, "Rate limit exceeded or temporary error, try again later")
+	var te *onlinesim.TransportError
+	eq(t, errors.As(err, &te), false)
+}
+
+func TestMissingKeyHTTP200WrongKeyIsAPIError(t *testing.T) {
+	f := &fake{t: t, replies: []reply{ok(`{"response":"ERROR_WRONG_KEY"}`)}}
+	c := onlinesim.New("", onlinesim.WithHTTPClient(&http.Client{Transport: f}))
+	_, err := c.User().Balance(ctx)
+	eq(t, apiErr(t, err, "ERROR_WRONG_KEY").Message, "Wrong or missing API key")
+}
+
+func TestNewErrorMessages(t *testing.T) {
+	for code, want := range map[string]string{
+		"ACCOUNT_CLEANED":    "Account was deleted",
+		"USER_NOT_ACTIVATED": "Account email is not confirmed",
+		"ERROR_UNDEFINED":    "Unexpected server error, try again",
+		"ERROR_NO_KEY":       "ERROR_NO_KEY", // no longer sent: no fallback text
+		"API_DISABLED":       "API_DISABLED",
+	} {
 		c, _ := fakeClient(t, []reply{ok(`{"response":"` + code + `"}`)})
-		_, err := c.Numbers().Get(ctx, "google", 44)
-		var noNum *onlinesim.NoNumberError
-		if !errors.As(err, &noNum) {
-			t.Fatalf("want *NoNumberError, got %T %v", err, err)
-		}
-		e := apiErr(t, err, code)
-		if code == "NO_NUMBER" {
-			eq(t, e.Message, "No numbers available for this service right now")
-		}
+		_, err := c.User().Balance(ctx)
+		eq(t, apiErr(t, err, code).Message, want)
 	}
 }
 
@@ -82,7 +111,7 @@ func TestHTTP456WrongKeyIsAPIErrorNotTransport(t *testing.T) {
 	c, _ := fakeClient(t, []reply{{status: 456, body: `{"response":"ERROR_WRONG_KEY"}`}})
 	_, err := c.User().Balance(ctx)
 	e := apiErr(t, err, "ERROR_WRONG_KEY")
-	eq(t, e.Message, "Wrong API key")
+	eq(t, e.Message, "Wrong or missing API key")
 	var te *onlinesim.TransportError
 	eq(t, errors.As(err, &te), false)
 }

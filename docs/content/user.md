@@ -13,14 +13,14 @@ Balance in USD.
 func (u *UserAPI) Balance(ctx context.Context) (Balance, error)
 ```
 
-`Balance`: `{Balance, Zbalance float64; Income *float64}`. `Balance` includes the sum frozen by numbers in progress (`Zbalance`): available = `Balance − Zbalance`. `Income` is the partner income, `nil` when the server sends none. The server caches the answer for 60 s.
+`Balance`: `{Balance, Zbalance float64; Income *float64}`. `Balance` includes the sum frozen by numbers and rents in progress (`Zbalance`, may be negative): available = `Balance − max(Zbalance, 0)`. `Income` is the partner income, `nil` when the server sends none. The server caches the answer for 60 s.
 
 ```go
 b, err := client.User().Balance(ctx)
 if err != nil {
 	return err
 }
-available := b.Balance - b.Zbalance
+available := b.Balance - max(b.Zbalance, 0)
 fmt.Println(available)
 ```
 
@@ -34,7 +34,7 @@ The account profile.
 func (u *UserAPI) Profile(ctx context.Context) (Profile, error)
 ```
 
-`Profile`: `{ID, Name, Username, Email, Locale, Currency, NumberCountry, NumberReject, WebhookURL, APIAccess, …}`. `APIAccess` and `NumberReject` take several shapes and stay `json.RawMessage`.
+`Profile`: `{ID, Name, Username, Email, Locale, Currency, Number, Country, NumberCountry, NumberReject, WebhookURL, APIAccess, …}`. `Number` is the account phone (`int64`, `0` when not set), `Country` a string (`""` when not set). `APIAccess` and `NumberReject` take several shapes and stay `json.RawMessage`.
 
 ```go
 p, err := client.User().Profile(ctx)
@@ -49,7 +49,7 @@ Top-up orders (paginated, newest first) and the available payment methods.
 func (u *UserAPI) PaymentHistory(ctx context.Context, page int) (PaymentHistory, error)
 ```
 
-`PaymentHistory`: `{Orders Paginator[PaymentOrder]; Paylist; Domains; Forms; Currency; Buttons}`. `PaymentOrder.Sum` stays a decimal string (`"89.00"`).
+`PaymentHistory`: `{Orders Paginator[PaymentOrder]; Paylist; Domains; Forms; Currency; Buttons}`. `PaymentOrder.Sum` stays a decimal string (`"89.00"`); `Currency` and `FormText` are `""` when the server sends `null`. `Paylist` maps the payment group id to its raw JSON; when the server sends it as a JSON array (ids `0, 1, 2…`) it is keyed `"0"`, `"1"`, ….
 
 ```go
 h, err := client.User().PaymentHistory(ctx, 1)

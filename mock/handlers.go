@@ -2,10 +2,11 @@ package mock
 
 import (
 	"fmt"
-	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	onlinesim "github.com/s00d/onlinesim-go-api/v3"
 )
@@ -76,6 +77,11 @@ func tzidParam(r *Request, fallback int64) int64 {
 		return fallback
 	}
 	return n
+}
+
+// iso is `YYYY-MM-DDTHH:MM:SS.000000Z` at seconds after the mock epoch, the ISO-8601 form getFreeList sends.
+func iso(seconds int64) string {
+	return epoch.Add(time.Duration(seconds) * time.Second).Format("2006-01-02T15:04:05.000000Z")
 }
 
 // decimal is USD as a decimal string, as the backend sends `balance` (3 digits) and rent `sum` (2 digits).
@@ -196,7 +202,10 @@ func getNum(s *state, r *Request) any {
 	if _, ok := r.Query["number"]; !ok {
 		return obj{"response": 1, "tzid": tzid}
 	}
-	return obj{"response": 1, "tzid": tzid, "number": op.Number, "country": country, "time": operationTime, "service": service}
+	return obj{
+		"response": 1, "tzid": tzid, "number": op.Number, "country": country, "time": operationTime, "service": service,
+		"title": service, "response_text": "Waiting for SMS", "guard_interval_remaining_seconds": s.guardInterval,
+	}
 }
 
 func getState(s *state, r *Request) any {
@@ -226,16 +235,25 @@ func getState(s *state, r *Request) any {
 
 func setOperationRevise(s *state, r *Request) any {
 	tzid := tzidParam(r, 0)
-	// Always succeeds, even for unknown tzids, like the backend.
-	if op, ok := s.operations[tzid]; ok && op.Status != onlinesim.TZOverOK {
+	if tzid == 0 {
+		return apiError("ERROR_NO_TZID")
+	}
+	op, ok := s.operations[tzid]
+	if !ok {
+		return apiError("ERROR_WRONG_TZID")
+	}
+	if op.Status != onlinesim.TZOverOK {
 		op.Cursor = len(op.Messages)
 		op.Status = onlinesim.TZNumWait
 	}
-	return obj{"response": 1, "tzid": tzid}
+	return obj{"tzid": strconv.FormatInt(tzid, 10), "response": "1"}
 }
 
 func setOperationOk(s *state, r *Request) any {
 	tzid := tzidParam(r, 0)
+	if tzid == 0 {
+		return apiError("ERROR_NO_TZID")
+	}
 	op, ok := s.operations[tzid]
 	if !ok || op.Status == onlinesim.TZOverOK {
 		return apiError("ERROR_WRONG_TZID")
@@ -306,15 +324,24 @@ func dayMap(days map[int]float64) obj {
 	return out
 }
 
-func rentItem(s *state, rent *Rent, r *Request) obj {
+// rentItem is a rent as the backend sends it. sum is a number in getRentNum/extendRentState and a 2-decimal
+// string in getRentState (stringSum). An unconfirmed rent (status 0) waits 20 minutes for its first SMS.
+func rentItem(s *state, rent *Rent, r *Request, stringSum bool) obj {
 	tariff, ok := s.rentTariffs[rent.Country]
 	extendable := rent.Extension && ok && tariff.Extend == 1
+	confirmed := rent.Status == 1
 	messages := make([]obj, 0, len(rent.Messages))
 	for i := len(rent.Messages) - 1; i >= 0; i-- { // newest first
 		m := rent.Messages[i]
-		messages = append(messages, obj{"id": m.ID, "service": m.Service, "text": m.Text, "code": m.Code, "created_at": m.CreatedAt})
+		// A notice about a prohibited sender carries the integer 0, other SMS a string ("" without a code).
+		var code any = m.Code
+		if m.Service == notify {
+			code = 0
+		}
+		messages = append(messages, obj{"id": m.ID, "service": m.Service, "text": m.Text, "code": code, "created_at": m.CreatedAt})
 	}
 	start := rent.Tzid
+	minutes := rent.minutesLeft()
 	extension := 0
 	if rent.Extension {
 		extension = 1
@@ -324,16 +351,33 @@ func rentItem(s *state, rent *Rent, r *Request) obj {
 	if extendable {
 		extend, dayExtend = dayMap(tariff.Days), tariff.Days[1]
 	}
+	var sum any = rent.Sum
+	if stringSum {
+		sum = decimal(toMills(rent.Sum), 2)
+	}
+	days, hours := 0, 0
+	if confirmed {
+		days, hours = rent.Days, rent.Days*24
+	}
+	var reload any
+	if rent.Country == 7 {
+		reload = 0
+	}
 	item := obj{
-		"status": 1, "extension": extension, "messages": messages, "webhook_url": s.webhookURL,
-		"sum": decimal(toMills(rent.Sum), 2), "country": rent.Country,
-		"start_time": stamp(start), "stop_time": stamp(start + int64(rent.Days)*86_400), "checked_time": stamp(start),
-		"number": rent.Number, "days_autoextend": 0, "rent": 1, "tzid": rent.Tzid,
-		"time": rent.Days * 24 * 60, "days": rent.Days, "hours": rent.Days * 24,
-		"extend": extend, "checked": true, "reload": nil, "day_extend": dayExtend, "m_ext": false, "freeze": false,
+		"status": rent.Status, "extension": extension, "messages": messages, "webhook_url": s.webhookURL,
+		"sum": sum, "country": rent.Country,
+		"start_time": stamp(start), "stop_time": stamp(start + int64(minutes)*60), "checked_time": stamp(start),
+		"number": rent.Number, "days_autoextend": rent.InitialDays, "rent": rent.Days, "tzid": rent.Tzid,
+		"time": minutes, "days": days, "hours": hours,
+		"extend": extend, "checked": confirmed, "reload": reload, "day_extend": dayExtend, "m_ext": false, "freeze": false,
 	}
 	if _, ok := r.Query["number"]; ok {
-		item["time_seconds"] = rent.Days * 86_400
+		item["time_seconds"] = minutes * 60
+		guard := 0
+		if !confirmed && len(rent.Messages) == 0 {
+			guard = s.guardInterval
+		}
+		item["guard_interval_remaining_seconds"] = guard
 	}
 	return item
 }
@@ -342,7 +386,7 @@ func getRentNum(s *state, r *Request) any {
 	country := intParam(r, "country", 7)
 	tariff, ok := s.rentTariffs[country]
 	if !ok {
-		return apiError("NO_COUNTRY")
+		return apiError("UNDEFINED_COUNTRY")
 	}
 	days := intParam(r, "days", 1)
 	price, ok := tariff.Days[days]
@@ -353,14 +397,15 @@ func getRentNum(s *state, r *Request) any {
 		return apiError("WARNING_LOW_BALANCE")
 	}
 	tzid := s.nextID()
-	s.balance -= toMills(price)
+	// Reserved, not charged: the first SMS that is not "notify" confirms the rent and charges it.
+	s.frozen += toMills(price)
 	rent := &Rent{
-		Tzid: tzid, Country: country, Number: shortNumber(tzid), Days: days, Sum: price,
+		Tzid: tzid, Country: country, Number: shortNumber(tzid), Days: days, InitialDays: days, Sum: price,
 		// `extension` defaults to 1 on the server; `0` makes the rent non-extendable for good.
 		Extension: r.Query["extension"] != "0",
 	}
 	s.rents[tzid] = rent
-	return obj{"response": 1, "item": rentItem(s, rent, r)}
+	return obj{"response": 1, "item": rentItem(s, rent, r, false)}
 }
 
 func getRentState(s *state, r *Request) any {
@@ -375,24 +420,25 @@ func getRentState(s *state, r *Request) any {
 	list := make([]obj, len(rents))
 	for i, rent := range rents {
 		s.poll(rent.Tzid)
-		list[i] = rentItem(s, rent, r)
+		list[i] = rentItem(s, rent, r, true)
 	}
 	return obj{"response": 1, "list": list}
 }
 
 func extendRentState(s *state, r *Request) any {
+	// Every refusal is TRY_AGAIN_LATER, like the backend: unknown tzid, unconfirmed rent, not extendable, unknown days.
 	rent, ok := s.rents[tzidParam(r, 0)]
 	if !ok {
-		return apiError("ERROR_WRONG_TZID")
+		return apiError("TRY_AGAIN_LATER")
 	}
 	tariff, ok := s.rentTariffs[rent.Country]
-	if !rent.Extension || !ok || tariff.Extend != 1 {
+	if !ok || rent.Status != 1 || !rent.Extension || tariff.Extend != 1 {
 		return apiError("TRY_AGAIN_LATER")
 	}
 	days := intParam(r, "days", 1)
 	price, ok := tariff.Days[days]
 	if !ok {
-		return apiError("UNDEFINED_DAYS")
+		return apiError("TRY_AGAIN_LATER")
 	}
 	if s.available() < toMills(price) {
 		return apiError("WARNING_LOW_BALANCE")
@@ -400,15 +446,25 @@ func extendRentState(s *state, r *Request) any {
 	s.balance -= toMills(price)
 	rent.Days += days
 	rent.Sum = fromMills(toMills(rent.Sum) + toMills(price))
-	return obj{"response": 1, "item": rentItem(s, rent, r)}
+	return obj{"response": 1, "item": rentItem(s, rent, r, false)}
 }
 
 func closeRentNum(s *state, r *Request) any {
 	tzid := tzidParam(r, 0)
-	if _, ok := s.rents[tzid]; !ok {
-		return apiError("ERROR_WRONG_TZID")
+	rent, ok := s.rents[tzid]
+	if !ok {
+		return apiError("ERROR_NO_OPERATIONS")
 	}
-	delete(s.rents, tzid) // no refund
+	if rent.Status == 0 {
+		// guardInterval stands in for the backend's first 120 s, during which a rent without any SMS stays open.
+		if len(rent.Messages) == 0 && s.guardInterval > 0 {
+			return apiError("NO_COMPLETE_TZID")
+		}
+		// Unconfirmed (no SMS or only "notify"): the reservation is released.
+		s.frozen -= toMills(rent.Sum)
+	}
+	// A confirmed rent closes without a refund.
+	delete(s.rents, tzid)
 	delete(s.scheduled, tzid)
 	return obj{"response": "1"}
 }
@@ -463,10 +519,8 @@ func getProfile(s *state, _ *Request) any {
 	}}
 }
 
-func isHTTPURL(value string) bool {
-	u, err := url.Parse(value)
-	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != ""
-}
+// urlPattern: the backend accepts any `scheme://…` URL.
+var urlPattern = regexp.MustCompile(`(?i)^[a-z][a-z0-9+.-]*://\S+$`)
 
 func profile(s *state, r *Request) any {
 	body, _ := r.Body.(obj)
@@ -477,7 +531,7 @@ func profile(s *state, r *Request) any {
 	raw, present := p["webhook_url"]
 	if raw != nil {
 		u, isString := raw.(string)
-		if !isString || !isHTTPURL(u) {
+		if !isString || !urlPattern.MatchString(u) {
 			// A validation error is HTTP 200 with the field messages in `response`.
 			return obj{"response": obj{"webhook_url": []string{"The webhook url must be a valid URL."}}}
 		}
@@ -499,7 +553,8 @@ func webhookLogs(s *state, r *Request) any {
 func getPaymentHistory(_ *state, r *Request) any {
 	return obj{
 		"response": "1", "orders": paginate([]any{}, intParam(r, "page", 1), 10, "getPaymentHistory.php"),
-		"paylist": []any{}, "domains": []any{}, "currency": obj{"USD": 1},
+		"paylist": []any{}, "domains": []string{"onlinesim.io"}, "forms": obj{"1": "Card"}, "currency": obj{"USD": 1},
+		"buttons": obj{"USD": []int{5, 10, 20}},
 	}
 }
 
@@ -509,6 +564,12 @@ type freeCountry struct {
 	name, text string
 	numbers    map[string][][2]string // short number → [sender, text]
 }
+
+// freeIgnore is `ignore` of getFreeList: a note about prohibited services and their ids.
+const freeIgnore = "<p>Messages from these services are not shown:</p><p>1,2,3</p>"
+
+// freeCodes: the backend lists country 44 first.
+var freeCodes = []int{44, 7}
 
 var freeData = map[int]freeCountry{
 	44: {name: "united_kingdom", text: "United Kingdom", numbers: map[string][][2]string{
@@ -523,7 +584,7 @@ var freeData = map[int]freeCountry{
 }
 
 func getFreeList(_ *state, r *Request) any {
-	codes := sortedKeys(freeData)
+	codes := freeCodes
 	country := intParam(r, "country", 44)
 	data, ok := freeData[country]
 	if !ok {
@@ -552,14 +613,15 @@ func getFreeList(_ *state, r *Request) any {
 		}
 		messages = append(messages, obj{
 			"id": i + 1, "text": m[1], "in_number": m[0], "my_number": number,
-			"created_at": stamp(int64(i)), "data_humans": "1 day ago", "code": code,
+			"created_at": iso(int64(i)), "data_humans": "1 day ago", "code": code,
 		})
 	}
 	countries := make([]obj, len(codes))
 	for i, c := range codes {
 		countries[i] = obj{"country": c, "country_text": freeData[c].text, "country_original": freeData[c].name}
 	}
-	page := paginate(messages, intParam(r, "page", 1), intParam(r, "count", 10), "getFreeList")
+	count := min(500, max(10, intParam(r, "count", 10)))
+	page := paginate(messages, max(1, intParam(r, "page", 1)), count, "getFreeList")
 	page["number"], page["country"] = number, country
-	return obj{"response": 1, "countries": countries, "numbers": numbers, "messages": page}
+	return obj{"response": 1, "countries": countries, "numbers": numbers, "messages": page, "ignore": freeIgnore, "content": nil}
 }

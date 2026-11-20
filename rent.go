@@ -14,11 +14,30 @@ type RentAPI struct {
 
 // RentSMS is one SMS of a rent.
 type RentSMS struct {
-	ID        int64  `json:"id"`
-	Service   string `json:"service"`
-	Text      string `json:"text"`
+	ID int64 `json:"id"`
+	// Service is the sender. "notify": a notice about a prohibited sender (does not confirm the rent);
+	// "init": the record of a rent confirmed at once.
+	Service string `json:"service"`
+	Text    string `json:"text"`
+	// Code is the code found in the text, "" when none. The server sends the integer 0 for a "notify" SMS;
+	// it is normalised to "0".
 	Code      string `json:"code"`
 	CreatedAt string `json:"created_at"`
+}
+
+// UnmarshalJSON accepts code as a string or a number (the integer 0 of a "notify" SMS becomes "0").
+func (s *RentSMS) UnmarshalJSON(b []byte) error {
+	type plain RentSMS
+	var v struct {
+		*plain
+		Code json.RawMessage `json:"code"`
+	}
+	v.plain = (*plain)(s)
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	s.Code = str(v.Code)
+	return nil
 }
 
 // RentItem is a rent operation.
@@ -27,7 +46,8 @@ type RentItem struct {
 	Status  int    `json:"status"`
 	Number  string `json:"number"`
 	Country int    `json:"country"`
-	// Sum is the price paid, USD (parsed from the server's decimal string).
+	// Sum is the cost of the rent incl. extensions, USD (the server sends a number in Get/Extend and a decimal
+	// string in State). Reserved (frozen in zbalance) while Status is 0, charged once the first SMS confirms it.
 	Sum   float64 `json:"sum"`
 	Days  int     `json:"days"`
 	Hours int     `json:"hours"`
@@ -56,7 +76,7 @@ type RentItem struct {
 	Messages []RentSMS `json:"messages"`
 }
 
-// UnmarshalJSON parses the decimal-string sum and accepts extend as `[]`.
+// UnmarshalJSON accepts sum as a number or a decimal string and extend as `[]`.
 func (r *RentItem) UnmarshalJSON(b []byte) error {
 	type plain RentItem
 	var v struct {
@@ -120,7 +140,9 @@ func rentDetail(q url.Values) url.Values {
 }
 
 // Get rents a number in country for days days. extension=false makes the rent non-extendable for good
-// (the server default, and the usual choice, is true).
+// (the server default, and the usual choice, is true). The price is reserved (zbalance), not charged: the rent
+// starts with Status 0 and Checked false and waits up to 20 minutes for its first SMS; the first SMS that is not
+// "notify" confirms it (Status 1) and charges the price. Unknown country: *APIError UNDEFINED_COUNTRY.
 func (a *RentAPI) Get(ctx context.Context, country, days int, extension bool) (RentItem, error) {
 	q := rentDetail(url.Values{"country": {itoa(country)}, "days": {itoa(days)}, "extension": {boolParam(extension)}})
 	var res struct {
@@ -158,7 +180,9 @@ func (a *RentAPI) StateOne(ctx context.Context, tzid int64) (RentItem, error) {
 	return res.List[0], nil
 }
 
-// Extend extends a rent by days days (only rents created with extension=true).
+// Extend extends a rent by days days and charges at once (only confirmed rents created with extension=true).
+// Every refusal (unknown tzid, unconfirmed rent, not extendable, days not in the tariff, a repeat within 10 s)
+// is *APIError TRY_AGAIN_LATER; WARNING_LOW_BALANCE when the balance is short.
 func (a *RentAPI) Extend(ctx context.Context, tzid int64, days int) (RentItem, error) {
 	q := tzidParam(tzid)
 	q.Set("days", itoa(days))
@@ -197,7 +221,9 @@ func (a *RentAPI) TariffsOne(ctx context.Context, country int) (RentTariff, erro
 	return res, nil
 }
 
-// Close returns the number before the rent period ends.
+// Close returns the number before the rent period ends. A confirmed rent closes without a refund. An unconfirmed
+// one (Status 0) cannot be closed within its first 120 s without any SMS (NO_COMPLETE_TZID); after that, with no
+// SMS or only "notify" ones, the reservation is released. Unknown tzid: *APIError ERROR_NO_OPERATIONS.
 func (a *RentAPI) Close(ctx context.Context, tzid int64) error {
 	return a.do(ctx, "rent/closeRentNum.php", tzidParam(tzid), nil, nil)
 }

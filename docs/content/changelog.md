@@ -7,6 +7,15 @@ navigation:
 
 The full history is in [CHANGELOG.md](https://github.com/s00d/onlinesim-go-api/blob/master/CHANGELOG.md).
 
+## 3.1.1
+
+Aligned with the regenerated backend API spec.
+
+- Decoding fixes: `Profile.Number` (`int64`) and `Profile.Country` (`string`) were swapped; `RentSMS.Code` accepts the integer `0` of a `notify` SMS (as `"0"`); rent `Sum` from a number or a decimal string; `PaymentHistory.Paylist` sent as a JSON array is kept (keyed by index).
+- `WaitCode` retries `TRY_AGAIN_LATER` (HTTP 429), `ERROR_UNDEFINED` and `INTERVAL_CONCURRENT_REQUESTS_ERROR` until its timeout.
+- Error messages: `"0"`, `ACCOUNT_CLEANED`, `USER_NOT_ACTIVATED`, `ERROR_UNDEFINED`, `FORWARD_NOT_SUPPORTED` added; dead codes removed; `*NoNumberError` only for `NO_NUMBER`.
+- The mock follows the backend: rent reservation and confirmation by the first non-`notify` SMS, extend/close rules, `setOperationRevise` answers, missing vs wrong key, webhook-log params, free list and payment history shapes. See [Testing](/testing).
+
 ## 3.1.0
 
 - New in-process mock: `mock.New(opts...)` is an `http.RoundTripper` that answers like the real API; `m.Client()` returns a normal client wired to it — no listener, network, key, money or clock. `mock.Start(opts...)` serves the same mock over HTTP. See [Testing](/testing).

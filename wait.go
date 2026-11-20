@@ -33,8 +33,10 @@ const (
 // calls Close (or Next with KeepOpen) and returns the code.
 //
 // A finished operation (TZ_OVER_OK, ERROR_NO_ITEMS) without a new code returns *APIError with that
-// state as the code. Running out of Timeout returns an error wrapping ErrTimeout. A *TransportError
-// is retried until the timeout; any *APIError is returned at once, and so is ctx's error.
+// state as the code. Running out of Timeout returns an error wrapping ErrTimeout. A *TransportError and the
+// transient *APIError codes TRY_AGAIN_LATER (HTTP 429 rate limit), ERROR_UNDEFINED and
+// INTERVAL_CONCURRENT_REQUESTS_ERROR are retried until the timeout; any other *APIError is returned at once,
+// and so is ctx's error.
 func (a *NumbersAPI) WaitCode(ctx context.Context, tzid int64, opts WaitCodeOptions) (string, error) {
 	interval, timeout := opts.Interval, opts.Timeout
 	if interval <= 0 {
@@ -54,7 +56,6 @@ func (a *NumbersAPI) WaitCode(ctx context.Context, tzid int64, opts WaitCodeOpti
 	deadline := now().Add(timeout)
 	for {
 		op, err := a.StateOne(ctx, tzid, StateOptions{FullMessage: opts.FullMessage})
-		var transport *TransportError
 		switch {
 		case err == nil:
 			if code := op.Msg.Text; code != "" && code != opts.Since {
@@ -70,7 +71,7 @@ func (a *NumbersAPI) WaitCode(ctx context.Context, tzid int64, opts WaitCodeOpti
 			if op.Response == TZOverOK || op.Response == TZErrorNoItems {
 				return "", newAPIError(string(op.Response), "")
 			}
-		case !errors.As(err, &transport) || ctx.Err() != nil:
+		case !retryable(err) || ctx.Err() != nil:
 			return "", err
 		}
 
@@ -82,6 +83,23 @@ func (a *NumbersAPI) WaitCode(ctx context.Context, tzid int64, opts WaitCodeOpti
 			return "", err
 		}
 	}
+}
+
+// retryable: a transport failure, or an API code that means "try again".
+func retryable(err error) bool {
+	var transport *TransportError
+	if errors.As(err, &transport) {
+		return true
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.Code {
+	case "TRY_AGAIN_LATER", "ERROR_UNDEFINED", "INTERVAL_CONCURRENT_REQUESTS_ERROR":
+		return true
+	}
+	return false
 }
 
 func realSleep(ctx context.Context, d time.Duration) error {

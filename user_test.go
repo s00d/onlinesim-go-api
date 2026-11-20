@@ -36,6 +36,36 @@ func TestProfile(t *testing.T) {
 	must(t, json.Unmarshal(p.NumberReject, &reject))
 	eq(t, reject, []string{"333"})
 	eq(t, p.NumberCountry, 1)
+	eq(t, [2]any{p.Number, p.Country}, [2]any{int64(0), ""}) // null
+}
+
+func TestProfileNumberIntCountryString(t *testing.T) {
+	c, _ := fakeClient(t, []reply{
+		ok(`{"response":"1","profile":{"id":1,"number":79001234567,"country":"RU"}}`),
+		ok(`{"response":"1","profile":{"id":1,"number":"79001234567","country":7}}`), // lenient
+	})
+	p, err := c.User().Profile(ctx)
+	must(t, err)
+	eq(t, [2]any{p.Number, p.Country}, [2]any{int64(79001234567), "RU"})
+	p, err = c.User().Profile(ctx)
+	must(t, err)
+	eq(t, [2]any{p.Number, p.Country}, [2]any{int64(79001234567), "7"})
+}
+
+func TestPaymentHistoryKeepsArrayPaylistAndNullableOrderFields(t *testing.T) {
+	var body map[string]json.RawMessage
+	must(t, json.Unmarshal([]byte(fixture(t, "getPaymentHistory")), &body))
+	body["paylist"] = json.RawMessage(`[{"id":0,"name":"Card"},{"id":1,"name":"Crypto"}]`)
+	body["orders"] = json.RawMessage(`{"current_page":1,"data":[{"id":1,"sum":"10.00","currency":null,"form_text":null,"stat":0,"created_at":"2026-06-14 09:12:12"}],"total":1}`)
+	raw, _ := json.Marshal(body)
+	c, _ := fakeClient(t, []reply{ok(string(raw))})
+	h, err := c.User().PaymentHistory(ctx, 1)
+	must(t, err)
+	eq(t, h.Paylist, map[string]json.RawMessage{
+		"0": json.RawMessage(`{"id":0,"name":"Card"}`),
+		"1": json.RawMessage(`{"id":1,"name":"Crypto"}`),
+	})
+	eq(t, [2]string{h.Orders.Data[0].Currency, h.Orders.Data[0].FormText}, [2]string{"", ""})
 }
 
 func TestPaymentHistoryNormalisesEmptyPaylist(t *testing.T) {

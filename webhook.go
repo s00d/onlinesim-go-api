@@ -23,16 +23,19 @@ type WebhookPayload struct {
 	OperationID int64
 	UserID      int64
 	CountryCode int
-	// Number is the number, e.g. "+79001234567".
+	// Number is the number: "+79001234567" for an activation (it may be "hidden"), digits without "+"
+	// (country code included) for a rent.
 	Number string
 	// Sender of the SMS, e.g. "VK".
 	Sender string
 	// Message is the full SMS text.
 	Message string
-	// Code is the code extracted from the SMS.
-	Code      string
+	// Code is the code extracted from the SMS, "" when none was found.
+	Code string
+	// TimeStart is the order time of an activation, the SMS time of a rent.
 	TimeStart string
-	TimeLeft  int64
+	// TimeLeft is in seconds for an activation, in minutes for a rent.
+	TimeLeft int64
 }
 
 // ParseWebhook parses an inbound webhook body (receiving_sms or rent_sms). It is lenient: numeric fields

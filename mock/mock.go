@@ -64,8 +64,8 @@ func WithPrices(p Prices) Option { return func(o *options) { o.prices = p } }
 // WithRentTariffs replaces the rent tariffs (default {7: {Days: {1: 1, 3: 2.5, 7: 5}, Extend: 1}}).
 func WithRentTariffs(t map[int]RentTariff) Option { return func(o *options) { o.rentTariffs = t } }
 
-// WithGuardInterval sets the guard interval of new operations, seconds (default 0). Above 0 an operation
-// without SMS cannot be closed (NO_COMPLETE_TZID).
+// WithGuardInterval sets the guard interval of new operations and rents, seconds (default 0). Above 0 an
+// operation without SMS, or an unconfirmed rent without any SMS, cannot be closed (NO_COMPLETE_TZID).
 func WithGuardInterval(seconds int) Option { return func(o *options) { o.guardInterval = seconds } }
 
 // New returns a mock in its initial state.
@@ -122,7 +122,7 @@ func (m *Mock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(payload)
 }
 
-// handle: log the request → failure queue → unknown path 404 → wrong key 456 → handler.
+// handle: log the request → failure queue → unknown path 404 → wrong key 456 / missing key 200 → handler.
 func (m *Mock) handle(method string, u *url.URL, header http.Header, body []byte) (int, string, []byte) {
 	path := strings.TrimPrefix(u.Path, "/")
 	if at := strings.Index(u.Path, "/api/"); at >= 0 {
@@ -154,8 +154,13 @@ func (m *Mock) handle(method string, u *url.URL, header http.Header, body []byte
 	if !ok {
 		return text(http.StatusNotFound, "Not Found")
 	}
-	if !publicPaths[path] && header.Get("Authorization") != "Bearer "+s.apiKey {
+	// A wrong key is HTTP 456 (public endpoints check a sent key too); no key at all is HTTP 200.
+	auth := header.Get("Authorization")
+	if auth != "" && auth != "Bearer "+s.apiKey {
 		return jsonBody(456, obj{"response": "ERROR_WRONG_KEY"})
+	}
+	if auth == "" && !publicPaths[path] {
+		return jsonBody(http.StatusOK, obj{"response": "ERROR_WRONG_KEY"})
 	}
 	return jsonBody(http.StatusOK, h(s, &req))
 }
@@ -249,7 +254,8 @@ func (m *Mock) SetBalance(usd float64) {
 	m.state.balance = toMills(usd)
 }
 
-// Balance is the total balance, USD, including the part frozen by open operations (as getBalance reports it).
+// Balance is the total balance, USD, including the part frozen by open operations and unconfirmed rents (as
+// getBalance reports it).
 func (m *Mock) Balance() float64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()

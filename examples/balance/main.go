@@ -16,5 +16,5 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("available: %.2f USD\n", b.Balance-b.Zbalance)
+	fmt.Printf("available: %.2f USD\n", b.Balance-max(b.Zbalance, 0))
 }
