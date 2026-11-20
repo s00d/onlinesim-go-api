@@ -57,9 +57,9 @@ func main() {
 | `OperationID` | `operation_id` | `int64` | `tzid` of the operation or rent. |
 | `UserID` | `user_id` | `int64` | Account id. |
 | `CountryCode` | `country_code` | `int` | Country code of the number. |
-| `Number` | `number` | `string` | The number, e.g. `+79001234567`. |
+| `Number` | `number` | `string` | Numbers: `+` and the full number (`+79001234567`), or `hidden`. Rent: the full number in digits without `+` (`79001234567`). |
 | `Sender` | `sender` | `string` | Sender of the SMS, e.g. `VK`. |
 | `Message` | `message` | `string` | Full SMS text. |
-| `Code` | `code` | `string` | Code extracted from the SMS. |
-| `TimeStart` | `time_start` | `string` | Start of the operation. |
-| `TimeLeft` | `time_left` | `int64` | Time left. |
+| `Code` | `code` | `string` | Code extracted from the SMS; `""` when none was found. |
+| `TimeStart` | `time_start` | `string` | Numbers: when the operation was ordered. Rent: when the SMS arrived. `YYYY-MM-DD HH:MM:SS`. |
+| `TimeLeft` | `time_left` | `int64` | Time left: seconds for numbers, minutes for rent. |

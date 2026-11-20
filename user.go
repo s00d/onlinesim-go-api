@@ -13,9 +13,9 @@ type UserAPI struct {
 
 // Balance is the account balance, USD.
 type Balance struct {
-	// Balance is the total; it includes Zbalance: available = Balance - Zbalance.
+	// Balance is the total; it includes Zbalance: available = Balance - max(Zbalance, 0).
 	Balance float64
-	// Zbalance is the sum frozen by numbers in progress.
+	// Zbalance is the sum frozen by numbers and rents in progress; it may be negative.
 	Zbalance float64
 	// Income is the partner income; nil when the server sends none.
 	Income *float64
@@ -36,23 +36,43 @@ type Profile struct {
 	Currency      string          `json:"currency"`
 	NumberCountry int             `json:"number_country"`
 	// NumberReject is the default reject list: a list or a map of prefixes.
-	NumberReject          json.RawMessage `json:"number_reject"`
-	WebhookURL            string          `json:"webhook_url"`
-	Number                string          `json:"number"`
-	Country               int             `json:"country"`
-	NumberRegion          int             `json:"number_region"`
-	IsAPI                 bool            `json:"is_api"`
-	Active                string          `json:"active"`
-	Block                 int             `json:"block"`
-	Disable               bool            `json:"disable"`
-	Verify                int             `json:"verify"`
-	UGroup                int             `json:"ugroup"`
-	Sub                   int             `json:"sub"`
-	FirstLogin            bool            `json:"first_login"`
-	IsProjectSubscription bool            `json:"is_project_subscription"`
-	ResetCount            int             `json:"resetCount"`
-	CreatedAt             string          `json:"created_at"`
-	NotificationAt        string          `json:"notification_at"`
+	NumberReject json.RawMessage `json:"number_reject"`
+	WebhookURL   string          `json:"webhook_url"`
+	// Number is the phone number of the account (digits), 0 when not set.
+	Number int64 `json:"number"`
+	// Country is the country of the account, "" when not set.
+	Country               string `json:"country"`
+	NumberRegion          int    `json:"number_region"`
+	IsAPI                 bool   `json:"is_api"`
+	Active                string `json:"active"`
+	Block                 int    `json:"block"`
+	Disable               bool   `json:"disable"`
+	Verify                int    `json:"verify"`
+	UGroup                int    `json:"ugroup"`
+	Sub                   int    `json:"sub"`
+	FirstLogin            bool   `json:"first_login"`
+	IsProjectSubscription bool   `json:"is_project_subscription"`
+	ResetCount            int    `json:"resetCount"`
+	CreatedAt             string `json:"created_at"`
+	NotificationAt        string `json:"notification_at"`
+}
+
+// UnmarshalJSON decodes number and country leniently: number as a number or a numeric string, country as a
+// string or a number; null is the zero value.
+func (p *Profile) UnmarshalJSON(b []byte) error {
+	type plain Profile
+	var v struct {
+		*plain
+		Number  json.RawMessage `json:"number"`
+		Country json.RawMessage `json:"country"`
+	}
+	v.plain = (*plain)(p)
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	n, _ := num(v.Number)
+	p.Number, p.Country = int64(n), str(v.Country)
+	return nil
 }
 
 // Paginator is a Laravel paginator page.
@@ -86,7 +106,8 @@ type PaymentOrder struct {
 // PaymentHistory is the top-up orders and the available payment methods.
 type PaymentHistory struct {
 	Orders Paginator[PaymentOrder] `json:"orders"`
-	// Paylist is the payment methods by list id; empty when none.
+	// Paylist is the payment methods by group id; empty when none. When the server sends a JSON array
+	// (ids 0, 1, 2…) it is keyed by index: "0", "1", ….
 	Paylist  map[string]json.RawMessage `json:"paylist"`
 	Domains  []string                   `json:"domains"`
 	Forms    map[string]string          `json:"forms"`
@@ -94,7 +115,7 @@ type PaymentHistory struct {
 	Buttons  map[string][]float64       `json:"buttons"`
 }
 
-// UnmarshalJSON accepts the maps as `[]`.
+// UnmarshalJSON accepts the maps as JSON arrays (`[]` is an empty map).
 func (h *PaymentHistory) UnmarshalJSON(b []byte) error {
 	type plain PaymentHistory
 	var v struct {
@@ -130,7 +151,7 @@ type WebhookLog struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
-// Balance returns the balance in USD.
+// Balance returns the balance in USD. Available = Balance - max(Zbalance, 0).
 func (a *UserAPI) Balance(ctx context.Context) (Balance, error) {
 	var res struct {
 		Balance  json.RawMessage `json:"balance"`

@@ -24,7 +24,7 @@ type state struct {
 	startBalance  int64
 
 	balance     int64 // total incl. the frozen part, mills
-	frozen      int64 // frozen by open operations, mills
+	frozen      int64 // frozen by open operations and unconfirmed rents, mills
 	operations  map[int64]*Operation
 	rents       map[int64]*Rent
 	webhookURL  *string
@@ -82,8 +82,14 @@ type Rent struct {
 	Country int
 	// Number without the country code, as the backend sends it for rents.
 	Number string
-	Days   int
-	// Sum is the total paid, USD.
+	// Days is the total rent days: the initial period plus extensions.
+	Days int
+	// InitialDays is the initial period (days of getRentNum).
+	InitialDays int
+	// Status is 0 while the rent is reserved and waits for its first SMS, 1 once an SMS that is not "notify"
+	// confirmed it and the price was charged.
+	Status int
+	// Sum is the total cost incl. extensions, USD. Frozen while Status is 0.
 	Sum       float64
 	Extension bool
 	// Messages, oldest first.
@@ -130,6 +136,10 @@ const (
 	userID = 1
 	// operationTime is the seconds an operation stays open, as reported in `time`. No clock: it never runs down.
 	operationTime = 1200
+	// rentFirstSMSMinutes is how long an unconfirmed rent waits for its first SMS (stop_time = start + this).
+	rentFirstSMSMinutes = 20
+	// notify is the sender of a rent SMS from a prohibited sender: it gets the integer code 0 and confirms nothing.
+	notify = "notify"
 )
 
 var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -247,7 +257,8 @@ func (s *state) deliver(tzid int64, text, service string) bool {
 		}
 		op.Messages = append(op.Messages, sms)
 		op.Status = onlinesim.TZNumAnswer
-		s.webhook("receiving_sms", tzid, op.Country, op.Number, sms)
+		// Activation: "+<digits>", seconds left, the order time.
+		s.webhook("receiving_sms", tzid, op.Country, op.Number, sms, operationTime, stamp(op.Tzid))
 		return true
 	}
 	if rent, ok := s.rents[tzid]; ok {
@@ -256,7 +267,15 @@ func (s *state) deliver(tzid int64, text, service string) bool {
 		}
 		id := s.nextID()
 		rent.Messages = append(rent.Messages, RentSMS{SMS: sms, ID: id, CreatedAt: stamp(id)})
-		s.webhook("rent_sms", tzid, rent.Country, rent.Number, sms)
+		if rent.Status == 0 && sms.Service != notify {
+			// The first real SMS confirms the rent: the reservation is charged.
+			cost := toMills(rent.Sum)
+			s.frozen -= cost
+			s.balance -= cost
+			rent.Status = 1
+		}
+		// Rent: the full number in digits without "+", minutes left, the SMS time.
+		s.webhook("rent_sms", tzid, rent.Country, strconv.Itoa(rent.Country)+rent.Number, sms, rent.minutesLeft(), stamp(id))
 		return true
 	}
 	return false
@@ -292,22 +311,27 @@ func (s *state) poll(tzid int64) {
 	}
 }
 
+// minutesLeft is the rent time in minutes: the whole period once confirmed, the first-SMS window before.
+// No clock: it never runs down.
+func (r *Rent) minutesLeft() int {
+	if r.Status == 1 {
+		return r.Days * 24 * 60
+	}
+	return rentFirstSMSMinutes
+}
+
 // webhook records what the backend would have sent; the mock makes no HTTP call.
-func (s *state) webhook(kind string, tzid int64, country int, number string, sms SMS) {
+func (s *state) webhook(kind string, tzid int64, country int, number string, sms SMS, timeLeft int, timeStart string) {
 	if s.webhookURL == nil {
 		return
-	}
-	var code any
-	if sms.Code != "" {
-		code = sms.Code
 	}
 	t := stamp(s.seq)
 	s.webhookLogs = append(s.webhookLogs, webhookLog{
 		ID: int64(len(s.webhookLogs) + 1), UserID: userID, WebhookURL: *s.webhookURL, Type: kind,
 		Params: map[string]any{
 			"webhook_type": kind, "operation_id": tzid, "user_id": userID, "country_code": country,
-			"number": number, "sender": sms.Service, "message": sms.Text, "code": code,
-			"time_start": t, "time_left": operationTime,
+			"number": number, "sender": sms.Service, "message": sms.Text, "code": sms.Code,
+			"time_start": timeStart, "time_left": timeLeft,
 		},
 		Status: "success", CreatedAt: t, UpdatedAt: t,
 	})
@@ -331,13 +355,4 @@ func (s *state) sortedRents() []*Rent {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Tzid < out[j].Tzid })
 	return out
-}
-
-func sortedKeys[V any](m map[int]V) []int {
-	keys := make([]int, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Ints(keys)
-	return keys
 }

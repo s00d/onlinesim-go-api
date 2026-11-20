@@ -9,14 +9,26 @@ import (
 
 // Client-side normalisation of server quirks, shared by the response types and ParseWebhook.
 
-// phpMap decodes a JSON object, and the empty PHP array `[]` (or null) as an empty map.
+// phpMap decodes a JSON object as is, and a JSON array as a map keyed by index ("0", "1", …): PHP sends an
+// array whose keys are 0..n (the empty one `[]` included) as a JSON list. null is an empty map.
 type phpMap[V any] map[string]V
 
 func (m *phpMap[V]) UnmarshalJSON(b []byte) error {
 	out := map[string]V{}
-	if t := bytes.TrimSpace(b); len(t) > 0 && t[0] == '{' {
-		if err := json.Unmarshal(t, &out); err != nil {
-			return err
+	if t := bytes.TrimSpace(b); len(t) > 0 {
+		switch t[0] {
+		case '{':
+			if err := json.Unmarshal(t, &out); err != nil {
+				return err
+			}
+		case '[':
+			var list []V
+			if err := json.Unmarshal(t, &list); err != nil {
+				return err
+			}
+			for i, v := range list {
+				out[strconv.Itoa(i)] = v
+			}
 		}
 	}
 	*m = out

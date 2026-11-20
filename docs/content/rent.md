@@ -8,13 +8,16 @@ navigation:
 A rent keeps a number for `days` days. Its SMS come in `RentItem.Messages`, newest first.
 
 `RentItem`: `{Tzid, Status, Number, Country, Sum, Days, Hours, Time, TimeSeconds, Extension, Extend, Messages, StartTime, StopTime, DayExtend, …}` —
-`Sum` is the price paid in USD (a `float64`; the server sends a decimal string), `Time` minutes left, `TimeSeconds` seconds left,
+`Sum` is the cost of the rent incl. extensions in USD (a `float64`; the server sends a number from `Get`/`Extend` and a decimal string from `State`),
+reserved (in `Zbalance`) while `Status` is `0` and charged once confirmed, `Time` minutes left, `TimeSeconds` seconds left,
 `Extension` `0` not extendable / `1` extendable / `2` auto-extension, `Extend` maps days to the extension price (empty when not extendable),
-`Messages` is `[]RentSMS`: `{ID, Service, Text, Code, CreatedAt}`.
+`Messages` is `[]RentSMS`: `{ID, Service, Text, Code, CreatedAt}`. `Code` is `""` without a code; an SMS from `Service` `"notify"`
+(a notice about a prohibited sender) comes with the integer `0`, which the SDK turns into `"0"`, and confirms nothing.
 
 ## Get
 
-Rent a number and charge the balance.
+Rent a number. The price is reserved (frozen in `Zbalance`), not charged: the rent starts with `Status` `0`, `Checked` `false`
+and waits up to 20 minutes for its first SMS. The first SMS that is not `notify` confirms it (`Status` `1`) and charges the price.
 
 ```go
 func (r *RentAPI) Get(ctx context.Context, country, days int, extension bool) (RentItem, error)
@@ -70,7 +73,7 @@ Errors: `*APIError` `ERROR_NO_OPERATIONS` for an unknown tzid.
 
 ## Extend
 
-Extend a rent by `days` days and charge the balance. Only rents created with `extension` `true`.
+Extend a rent by `days` days and charge the balance at once. Only confirmed rents (`Status` `1`) created with `extension` `true`.
 
 ```go
 func (r *RentAPI) Extend(ctx context.Context, tzid int64, days int) (RentItem, error)
@@ -81,11 +84,12 @@ rent, err := client.Rent().Extend(ctx, tzid, 3)
 fmt.Println(rent.StopTime, err)
 ```
 
-Errors: `*APIError` `TRY_AGAIN_LATER` (not extendable, unknown tzid or period, a repeat within 10 s), `WARNING_LOW_BALANCE`.
+Errors: `*APIError` `TRY_AGAIN_LATER` for every refusal (unknown tzid, rent not confirmed yet, not extendable, unknown period, a repeat within 10 s), `WARNING_LOW_BALANCE`.
 
 ## Close
 
-Return the number before the period ends. A rent that is not confirmed yet and has no SMS can be closed only after 120 s; US numbers cannot be closed early.
+Return the number before the period ends. A confirmed rent closes without a refund. A rent that is not confirmed yet (`Status` `0`) and has no SMS
+can be closed only after 120 s; then, with no SMS or only `notify` ones, the reservation is released. US numbers cannot be closed early.
 
 ```go
 func (r *RentAPI) Close(ctx context.Context, tzid int64) error
@@ -96,7 +100,7 @@ err := client.Rent().Close(ctx, tzid)
 fmt.Println(err)
 ```
 
-Errors: `*APIError` `ERROR_NO_OPERATIONS`, `NO_COMPLETE_TZID`, `NO_CLOSE_RENT_US`, `TRY_AGAIN_LATER`.
+Errors: `*APIError` `ERROR_NO_OPERATIONS` (unknown tzid), `NO_COMPLETE_TZID`, `NO_CLOSE_RENT_US`, `TRY_AGAIN_LATER`.
 
 ## Tariffs
 

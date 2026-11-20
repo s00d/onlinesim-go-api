@@ -37,7 +37,8 @@ const (
 
 // Operation is a number operation (a getState item).
 type Operation struct {
-	Tzid     int64           `json:"tzid"`
+	Tzid int64 `json:"tzid"`
+	// Response is the state; "" when the server omits it (no number could be issued).
 	Response OperationStatus `json:"response"`
 	Number   string          `json:"number"`
 	Service  string          `json:"service"`
@@ -253,7 +254,8 @@ func stateQuery(opts StateOptions) url.Values {
 	}
 }
 
-// Next switches the operation to its next SMS and keeps it open.
+// Next switches the operation to its next SMS and keeps it open. Unknown or foreign tzid: *APIError
+// ERROR_WRONG_TZID; tzid 0: ERROR_NO_TZID.
 func (a *NumbersAPI) Next(ctx context.Context, tzid int64) error {
 	return a.do(ctx, "setOperationRevise.php", tzidParam(tzid), nil, nil)
 }
@@ -265,7 +267,8 @@ func (a *NumbersAPI) Close(ctx context.Context, tzid int64) error {
 	return a.do(ctx, "setOperationOk.php", tzidParam(tzid), nil, nil)
 }
 
-// Ban finishes the operation and reports the number as bad (only before any SMS arrived).
+// Ban finishes the operation and reports the number as bad (only before any SMS arrived). After an SMS the
+// server refuses with `{"response":"0"}`: *APIError with Code "0" ("Ban not applied: the operation already has an SMS").
 func (a *NumbersAPI) Ban(ctx context.Context, tzid int64) error {
 	q := tzidParam(tzid)
 	q.Set("ban", "1")

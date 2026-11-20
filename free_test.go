@@ -19,6 +19,14 @@ func TestFreeListNoSuffixOnlySetParams(t *testing.T) {
 	eq(t, list.Countries[1].Country, 380)
 }
 
+func TestFreeListAcceptsNullCountryTexts(t *testing.T) {
+	c, _ := fakeClient(t, []reply{ok(`{"response":1,"countries":[{"country":999,"country_text":null,"country_original":null}],"numbers":{"1":{"country":999,"country_original":null}},"messages":{"data":[]},"ignore":"<p>x</p>","content":null}`)})
+	l, err := c.Free().List(ctx, onlinesim.FreeListOptions{})
+	must(t, err)
+	eq(t, l.Countries, []onlinesim.FreeCountry{{Country: 999}})
+	eq(t, l.Numbers["1"].CountryOriginal, "")
+}
+
 func TestFreeListNormalisesEmptyNumbers(t *testing.T) {
 	c, f := fakeClient(t, []reply{ok(`{"response":1,"countries":[],"numbers":[],"messages":{"data":[]}}`)})
 	list, err := c.Free().List(ctx, onlinesim.FreeListOptions{})

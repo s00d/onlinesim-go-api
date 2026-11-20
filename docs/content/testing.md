@@ -5,7 +5,7 @@ navigation:
   order: 6
 ---
 
-Package `github.com/s00d/onlinesim-go-api/v3/mock` is a fake of the OnlineSim API that ships with the module. `mock.Mock` is an `http.RoundTripper` that answers like the real backend — same shapes, same error codes, HTTP 456 for a wrong key — and keeps a balance, operations and rents. Your code talks to a normal `*onlinesim.Client`, so nothing in it changes for tests. It is deterministic: no randomness, no clock, numbers and ids come from a counter. Standard library only; it is not linked into your binary unless you import it.
+Package `github.com/s00d/onlinesim-go-api/v3/mock` is a fake of the OnlineSim API that ships with the module. `mock.Mock` is an `http.RoundTripper` that answers like the real backend — same shapes, same error codes, HTTP 456 for a wrong key, HTTP 200 `ERROR_WRONG_KEY` for none — and keeps a balance, operations and rents. Your code talks to a normal `*onlinesim.Client`, so nothing in it changes for tests. It is deterministic: no randomness, no clock, numbers and ids come from a counter. Standard library only; it is not linked into your binary unless you import it.
 
 ## Setup
 
@@ -33,7 +33,7 @@ func WithGuardInterval(seconds int) Option      // default 0
 | `WithBalance` | `100` | Starting balance, USD. |
 | `WithPrices` | `{7: {vkcom: 0.5, telegram: 1.2, google: 0.3}, 44: {google: 0.2, vkcom: 0.36}}` | Number prices; replaces the defaults. Also feeds `Numbers().Tariffs`. |
 | `WithRentTariffs` | `{7: {Days: {1: 1, 3: 2.5, 7: 5}, Extend: 1}}` | Rent prices; `Extend: 0` makes rents of that country non-extendable. |
-| `WithGuardInterval` | `0` | `> 0`: an operation without SMS cannot be closed (`NO_COMPLETE_TZID`). |
+| `WithGuardInterval` | `0` | `> 0`: an operation without SMS, or an unconfirmed rent without any SMS, cannot be closed (`NO_COMPLETE_TZID`). |
 
 `m.Client(opts...)` takes the usual [client options](/#client-options) (`WithLang`, `WithTimeout`, …). To build the client yourself — for example to test a wrong key — pass the mock as the transport; any base URL works:
 
@@ -149,7 +149,7 @@ func TestMissingNumberAndNetworkHiccup(t *testing.T) {
 }
 ```
 
-The state itself produces the real error codes too: `WARNING_LOW_BALANCE` when the balance is short, `NO_NUMBER` when `reject` matches the next number, `UNDEFINED_COUNTRY` / `ERROR_NO_SERVICE` for unknown prices, `ERROR_WRONG_TZID` for an unknown or closed operation, `TRY_AGAIN_LATER` when extending a non-extendable rent, `ERROR_WRONG_KEY` (HTTP 456) for a wrong key.
+The state itself produces the real error codes too: `WARNING_LOW_BALANCE` when the balance is short, `NO_NUMBER` when `reject` matches the next number, `UNDEFINED_COUNTRY` / `ERROR_NO_SERVICE` for unknown prices, `ERROR_WRONG_TZID` for an unknown or closed operation (`Next` too; `ERROR_NO_TZID` for tzid `0`), `UNDEFINED_COUNTRY` / `UNDEFINED_DAYS` for an unknown rent country or period, `TRY_AGAIN_LATER` for every refused `Rent().Extend`, `ERROR_NO_OPERATIONS` for an unknown rent in `Rent().Close`, `ERROR_WRONG_KEY` for a wrong key (HTTP 456) or no key (HTTP 200).
 
 ## Inspecting requests
 
@@ -194,7 +194,7 @@ func TestSendsRejectAsACommaList(t *testing.T) {
 | `AddSMSAfter(tzid, text, polls, opts...) error` | The SMS arrives after `polls` state requests for `tzid` (`Numbers().State`/`StateOne`, `Rent().State`/`StateOne`). |
 | `FailNext(code, opts...)` | The next request (to `mock.OnEndpoint(path)` only, e.g. `"getNum.php"`) answers `{"response": code}`. |
 | `FailNextTransport(opts...)` | The next request fails with a non-JSON body and HTTP 502 (`mock.WithStatus(n)` for another). |
-| `SetBalance(usd)` / `Balance()` | Set / read the total balance, USD (it includes the part frozen by open operations, as `User().Balance` reports it). |
+| `SetBalance(usd)` / `Balance()` | Set / read the total balance, USD (it includes the part frozen by open operations and unconfirmed rents, as `User().Balance` reports it). |
 | `Operations()` / `Rents()` | Copies of the current number operations / open rents, for assertions. |
 | `Requests()` | Log of the requests received. |
 | `Reset()` | Back to the initial state. |
@@ -205,7 +205,7 @@ A `Mock` is safe for concurrent use.
 ## What the mock does
 
 - **Numbers**: `Get` freezes the price; `Close` after an SMS spends it, `Close` without one refunds it; `Ban` after an SMS answers `"0"`, like the server. Numbers are `+<country>9000000NN`, ids count from 1. `Next` switches to the following SMS. The operation's `time` stays at 1200 s — there is no clock.
-- **Rent**: `Get` charges at once and keeps the `extension` flag; `Extend` charges again; `Close` removes the rent (no refund). SMS appear in `Messages`, newest first.
-- **User**: `Balance` (frozen part included), a fixed profile, `SetWebhookURL` validates `http(s)` URLs (`VALIDATION_ERROR` otherwise), `WebhookLogs` lists the deliveries the mock *recorded* when an SMS arrived while a webhook URL was set — it makes no HTTP call. `PaymentHistory` is empty.
-- **Free**: `Free().List` returns two fixed countries with one number and a few SMS each.
-- Not imitated: the server's 5 s lock after `setOperationOk` (`INTERVAL_CONCURRENT_REQUESTS_ERROR`) and anything else that needs real time.
+- **Rent**: `Get` reserves the price (`Status` `0`, `Checked` `false`) and keeps the `extension` flag; the first SMS that is not `notify` confirms the rent (`Status` `1`) and charges it — `AddSMS(tzid, text, mock.FromService("notify"))` adds a notice with `code` `0` that confirms nothing. `Extend` works on a confirmed rent and charges at once. `Close` releases the reservation of an unconfirmed rent and gives no refund for a confirmed one. `sum` is a number in `Get`/`Extend` and a decimal string on the wire of `State`, like the server. SMS appear in `Messages`, newest first.
+- **User**: `Balance` (frozen part included), a fixed profile, `SetWebhookURL` accepts any `scheme://…` URL (`VALIDATION_ERROR` otherwise), `WebhookLogs` lists the deliveries the mock *recorded* when an SMS arrived while a webhook URL was set — it makes no HTTP call; their `params` follow the real payload (`code` `""` without a code, rent `number` in digits without `+`, rent `time_left` in minutes). `PaymentHistory` has no orders.
+- **Free**: `Free().List` returns two fixed countries (44 first) with one number and a few SMS each.
+- Not imitated: anything that needs real time — the 5 s lock after `setOperationOk` (`INTERVAL_CONCURRENT_REQUESTS_ERROR`), the 10 s lock of `Rent().Extend`, the 120 s before an unconfirmed rent may be closed and its 20-minute wait for the first SMS. `WithGuardInterval(n > 0)` stands in for "too early to close".

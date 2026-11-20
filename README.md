@@ -21,7 +21,7 @@ b, err := client.User().Balance(ctx)
 if err != nil {
 	return err
 }
-fmt.Printf("available: %.2f USD\n", b.Balance-b.Zbalance)
+fmt.Printf("available: %.2f USD\n", b.Balance-max(b.Zbalance, 0))
 
 order, err := client.Numbers().GetWithNumber(ctx, "google", 44)
 if err != nil {

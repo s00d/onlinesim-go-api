@@ -103,6 +103,37 @@ func TestWaitCodeRetriesTransportErrors(t *testing.T) {
 	eq(t, clk.sleeps, []time.Duration{5 * time.Second, 5 * time.Second})
 }
 
+func TestWaitCodeRetriesTransientAPIErrors(t *testing.T) {
+	for _, code := range []string{"TRY_AGAIN_LATER", "ERROR_UNDEFINED", "INTERVAL_CONCURRENT_REQUESTS_ERROR"} {
+		clk := &fakeClock{}
+		c, f := fakeClient(t, []reply{{status: 429, body: `{"response":"` + code + `"}`}, answer("42"), ok(closed)})
+		got, err := c.Numbers().WaitCode(ctx, 7, clk.opts(onlinesim.WaitCodeOptions{}))
+		must(t, err)
+		eq(t, got, "42")
+		eq(t, f.paths(), []string{"/api/getState.php", "/api/getState.php", "/api/setOperationOk.php"})
+		eq(t, clk.sleeps, []time.Duration{5 * time.Second})
+	}
+}
+
+func TestWaitCodeTransientAPIErrorEndsInTimeout(t *testing.T) {
+	clk := &fakeClock{}
+	busy := ok(`{"response":"TRY_AGAIN_LATER"}`)
+	c, f := fakeClient(t, []reply{busy, busy, busy})
+	_, err := c.Numbers().WaitCode(ctx, 7, clk.opts(onlinesim.WaitCodeOptions{Timeout: 10 * time.Second}))
+	if !errors.Is(err, onlinesim.ErrTimeout) {
+		t.Fatalf("want ErrTimeout, got %v", err)
+	}
+	eq(t, len(f.paths()), 3)
+}
+
+func TestWaitCodeOperationWithoutResponseKeepsPolling(t *testing.T) {
+	clk := &fakeClock{}
+	c, _ := fakeClient(t, []reply{ok(`[{"tzid":7}]`), answer("77"), ok(closed)})
+	got, err := c.Numbers().WaitCode(ctx, 7, clk.opts(onlinesim.WaitCodeOptions{}))
+	must(t, err)
+	eq(t, got, "77")
+}
+
 func TestWaitCodeReturnsAPIErrorAtOnce(t *testing.T) {
 	clk := &fakeClock{}
 	c, f := fakeClient(t, []reply{ok(`{"response":"ERROR_NO_OPERATIONS"}`)})

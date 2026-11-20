@@ -130,6 +130,26 @@ func TestCloseSurfacesErrorsWithoutRetry(t *testing.T) {
 	eq(t, len(f.paths()), 2)
 }
 
+func TestBanAfterSMSIsAPIErrorZero(t *testing.T) {
+	c, _ := fakeClient(t, []reply{ok(`{"response":"0"}`)})
+	err := c.Numbers().Ban(ctx, 1520)
+	eq(t, apiErr(t, err, "0").Message, "Ban not applied: the operation already has an SMS")
+}
+
+func TestNextAcceptsStringTzidAnswerAndWrongTzid(t *testing.T) {
+	c, _ := fakeClient(t, []reply{ok(`{"tzid":"1520","response":"1"}`), ok(`{"response":"ERROR_WRONG_TZID"}`)})
+	must(t, c.Numbers().Next(ctx, 1520))
+	apiErr(t, c.Numbers().Next(ctx, 1), "ERROR_WRONG_TZID")
+}
+
+func TestStateOneWithoutResponse(t *testing.T) {
+	c, _ := fakeClient(t, []reply{ok(`[{"tzid":5,"country":7,"service":"vkcom","sum":0.5,"time":900,"form":"index"}]`)})
+	op, err := c.Numbers().StateOne(ctx, 5, onlinesim.StateOptions{})
+	must(t, err)
+	eq(t, op.Tzid, int64(5))
+	eq(t, op.Response, onlinesim.OperationStatus(""))
+}
+
 func TestTariffsCountryAllAndEmptyServices(t *testing.T) {
 	uk := fixture(t, "getNumbersStats_44")
 	c, f := fakeClient(t, []reply{ok(`{"44":` + uk + `,"7":{"name":"russia","position":1,"code":7,"other":false,"new":false,"enabled":true,"services":[]}}`)})

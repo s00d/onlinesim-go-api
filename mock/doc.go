@@ -1,6 +1,6 @@
 // Package mock is a fake OnlineSim API for testing integrations offline: no network, no key, no money,
 // no clock. It answers every endpoint the SDK calls like the real backend (same shapes, same error codes,
-// HTTP 456 for a wrong key) and keeps a balance, operations and rents. Deterministic: ids and numbers come
+// HTTP 456 for a wrong key, HTTP 200 ERROR_WRONG_KEY for none) and keeps a balance, operations and rents. Deterministic: ids and numbers come
 // from a counter.
 //
 // In-process (no listener): Mock is an http.RoundTripper.

@@ -129,7 +129,7 @@ func (n *NumbersAPI) WaitCode(ctx context.Context, tzid int64, opts WaitCodeOpti
 | `Sleep` | `func(ctx, d) error` | real timer | Injectable for tests. |
 | `Now` | `func() time.Time` | `time.Now` | Injectable for tests. |
 
-A transient `*TransportError` is retried until the timeout; any `*APIError` is returned at once, and so is the context's error.
+Transient errors are retried until the timeout: `*TransportError`, and `*APIError` `TRY_AGAIN_LATER` (the HTTP 429 rate limit), `ERROR_UNDEFINED` and `INTERVAL_CONCURRENT_REQUESTS_ERROR`. Any other `*APIError` is returned at once, and so is the context's error.
 
 ```go
 n := client.Numbers()
@@ -155,6 +155,8 @@ func (n *NumbersAPI) Next(ctx context.Context, tzid int64) error
 err := client.Numbers().Next(ctx, tzid)
 fmt.Println(err)
 ```
+
+Errors: `*APIError` `ERROR_WRONG_TZID` (not an operation of your account), `ERROR_NO_TZID`.
 
 ## Close
 
@@ -184,7 +186,7 @@ err := client.Numbers().Ban(ctx, tzid)
 fmt.Println(err)
 ```
 
-Errors: as `Close`.
+Errors: as `Close`; `*APIError` with code `"0"` when the operation already has an SMS — nothing is changed then.
 
 ## Tariffs
 

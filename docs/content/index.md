@@ -37,7 +37,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("available: %.2f USD\n", b.Balance-b.Zbalance)
+	fmt.Printf("available: %.2f USD\n", b.Balance-max(b.Zbalance, 0))
 
 	order, err := client.Numbers().GetWithNumber(ctx, "google", 44)
 	if err != nil {
@@ -81,7 +81,7 @@ Sections: [`client.Numbers()`](/numbers), [`client.Rent()`](/rent), [`client.Use
 
 Go has no default arguments: pass every value explicitly (the API's usual choices are country `7`, rent `days` `1`, `extension` `true`, `page` `1`). Option structs (`StateOptions`, `WaitCodeOptions`, `FreeListOptions`) are defaults when zero. Durations are `time.Duration`.
 
-Result structs keep the server's field set with Go names (`guard_interval_remaining_seconds` → `GuardIntervalRemainingSeconds`). Money that the server sends as a decimal string (`balance`, rent `sum`) is a `float64`, maps that arrive as an empty PHP array `[]` are empty maps, and JSON `null` is the zero value.
+Result structs keep the server's field set with Go names (`guard_interval_remaining_seconds` → `GuardIntervalRemainingSeconds`). Money that the server sends as a decimal string (`balance`, rent `sum` in `Rent().State`) is a `float64`, maps that arrive as a PHP array (`[]`, or a JSON list when the keys are 0, 1, 2… — e.g. `PaymentHistory.Paylist`) are maps keyed by index, and JSON `null` is the zero value.
 
 The client does not throttle or retry. The server answers `INTERVAL_CONCURRENT_REQUESTS_ERROR` to requests that are too frequent (and locks a tzid for 5 s after each `Close`); wait and retry, or wrap the transport with your own limiter.
 
@@ -89,8 +89,8 @@ The client does not throttle or retry. The server answers `INTERVAL_CONCURRENT_R
 
 | Error | When | Fields |
 |---|---|---|
-| `*APIError` | The API answered with an error code (also a wrong key, HTTP 456). | `Code`, `Message` |
-| `*NoNumberError` | `NO_NUMBER` / `NO_NUMBER_FOR_FORWARD`: no number right now. `errors.As` also matches it as `*APIError`. | `Code`, `Message` |
+| `*APIError` | The API answered with an error code (also a wrong key, HTTP 456, and the rate limit, HTTP 429 `TRY_AGAIN_LATER`). | `Code`, `Message` |
+| `*NoNumberError` | `NO_NUMBER`: no number right now. `errors.As` also matches it as `*APIError`. | `Code`, `Message` |
 | `*TransportError` | Network error, request timeout, canceled context, or a body that is not JSON. | `Status` (`0` without a response), `Body` (first 500 bytes), `Err` |
 | `ErrTimeout` | `WaitCode` got no code within its `Timeout` (match with `errors.Is`). | — |
 

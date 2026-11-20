@@ -166,7 +166,8 @@ func (c *Client) networkError(ctx context.Context, err error) error {
 }
 
 // decode applies the response rules: non-JSON → TransportError; an object with `response`
-// → success or APIError (checked before the HTTP status: a wrong key is HTTP 456 with a JSON code);
+// → success or APIError (checked before the HTTP status: a wrong key is HTTP 456 and the rate limit HTTP 429,
+// both with a JSON code);
 // anything else → TransportError on a non-2xx status, the body otherwise.
 func decode(status int, body []byte, out any) error {
 	excerpt := string(body)
@@ -220,7 +221,7 @@ func checkResponse(response, message json.RawMessage) error {
 	var msg string
 	_ = json.Unmarshal(message, &msg)
 	apiErr := newAPIError(code, msg)
-	if code == "NO_NUMBER" || code == "NO_NUMBER_FOR_FORWARD" {
+	if code == "NO_NUMBER" {
 		return &NoNumberError{APIError: *apiErr}
 	}
 	return apiErr
