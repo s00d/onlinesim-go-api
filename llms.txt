@@ -1,0 +1,17 @@
+# onlinesim-go-api
+
+> Typed, dependency-free Go client for the OnlineSim API.
+
+## Documentation Sets
+
+- [onlinesim-go-api — full docs](https://s00d.github.io/onlinesim-go-api/llms-full.txt): Complete documentation of the onlinesim-go-api SDK.
+
+## Documentation
+
+- [Changelog](https://s00d.github.io/onlinesim-go-api/raw/changelog.md): Release notes of onlinesim-go-api and the v2 → v3 migration.
+- [Free numbers](https://s00d.github.io/onlinesim-go-api/raw/free.md): Public numbers and their SMS — client.Free(). No API key needed.
+- [Numbers](https://s00d.github.io/onlinesim-go-api/raw/numbers.md): Order a number, read its SMS, close it — client.Numbers().
+- [Rent](https://s00d.github.io/onlinesim-go-api/raw/rent.md): Rent a number for days and receive every SMS sent to it — client.Rent().
+- [Testing](https://s00d.github.io/onlinesim-go-api/raw/testing.md): Test your integration offline with the bundled mock — no network, key or money.
+- [User](https://s00d.github.io/onlinesim-go-api/raw/user.md): Balance, profile, payments and the webhook URL — client.User().
+- [Webhooks](https://s00d.github.io/onlinesim-go-api/raw/webhooks.md): Receive SMS as HTTP callbacks and parse them with ParseWebhook.

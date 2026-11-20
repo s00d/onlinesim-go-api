@@ -1,0 +1,830 @@
+# Changelog
+
+The full history is in [CHANGELOG.md](https://github.com/s00d/onlinesim-go-api/blob/master/CHANGELOG.md){rel="&#x22;nofollow&#x22;"}.
+
+## 3.1.1
+
+Aligned with the regenerated backend API spec.
+
+- Decoding fixes: `Profile.Number` (`int64`) and `Profile.Country` (`string`) were swapped; `RentSMS.Code` accepts the integer `0` of a `notify` SMS (as `"0"`); rent `Sum` from a number or a decimal string; `PaymentHistory.Paylist` sent as a JSON array is kept (keyed by index).
+- `WaitCode` retries `TRY_AGAIN_LATER` (HTTP 429), `ERROR_UNDEFINED` and `INTERVAL_CONCURRENT_REQUESTS_ERROR` until its timeout.
+- Error messages: `"0"`, `ACCOUNT_CLEANED`, `USER_NOT_ACTIVATED`, `ERROR_UNDEFINED`, `FORWARD_NOT_SUPPORTED` added; dead codes removed; `*NoNumberError` only for `NO_NUMBER`.
+- The mock follows the backend: rent reservation and confirmation by the first non-`notify` SMS, extend/close rules, `setOperationRevise` answers, missing vs wrong key, webhook-log params, free list and payment history shapes. See [Testing](https://s00d.github.io/onlinesim-go-api/testing).
+
+## 3.1.0
+
+- New in-process mock: `mock.New(opts...)` is an `http.RoundTripper` that answers like the real API; `m.Client()` returns a normal client wired to it — no listener, network, key, money or clock. `mock.Start(opts...)` serves the same mock over HTTP. See [Testing](https://s00d.github.io/onlinesim-go-api/testing).
+- Mock control API aligned with the other OnlineSim SDKs: `AddSMS`, `AddSMSAfter`, `FailNext`, `FailNextTransport`, `SetBalance`, `Balance`, `Operations`, `Rents`, `Requests`, `Reset`. It keeps a real balance (price frozen on order, spent on close after an SMS, refunded without one), derives tariffs from its prices and records webhook deliveries.
+- The old mock helpers (`ScriptSMS`, `SmsScript`, `FailNoNumber`, `FailBalance`, `AddRentSMS`, the 3-argument `SetBalance`, `NewBuilder`/`StatePath` persistence) are gone; the mock key is now `mock-key`.
+
+## 3.0.0
+
+Module path `github.com/s00d/onlinesim-go-api/v3`. The API follows the shared OnlineSim SDK contract; v2 code does not compile unchanged.
+
+- The key is sent as `Authorization: Bearer <key>`, never in the URL.
+- Typed errors: `*APIError`, `*NoNumberError`, `*TransportError`, `ErrTimeout`; a wrong key (HTTP 456) is an `*APIError`.
+- `WaitCode` polls every 5 s for up to 10 min, stops at once on a finished operation, retries network errors, takes an injectable `Sleep`/`Now`.
+- No client-side pacing or retries; `INTERVAL_CONCURRENT_REQUESTS_ERROR` reaches the caller.
+- New: `Free().List` options, `ParseWebhook`, `AddRentSMS` in the mock; the mock checks paths and the key.
+- Removed: `Numbers().Repeat` / `Service` / `ServiceNumber`, `Rent().PortReload`, `User().CreateEmpty`, `Free().Countries` / `Numbers` / `Messages`.
+
+## Migrating from v2
+
+Replace the import path, then:
+
+| v2                                                                                                | v3                                                                                             |
+| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `github.com/s00d/onlinesim-go-api/v2`                                                             | `github.com/s00d/onlinesim-go-api/v3`                                                          |
+| `Numbers().Get(ctx, GetNumberParams{Service, Country, Reject})`                                   | `Numbers().Get(ctx, service, country, reject...)` (`reject` are strings)                       |
+| `GetWithNumber(ctx, GetNumberParams{…})` → `NumberWithTz`                                         | `GetWithNumber(ctx, service, country, reject...)` → `NumberOrder`                              |
+| `State(ctx, StateParams{MessageToCode: IntPtr(0), OrderBy: "ASC", …})`                            | `State(ctx, StateOptions{FullMessage: true, OrderBy: OrderAsc})`                               |
+| `StateOne` type, `st.MsgString()`                                                                 | `Operation`, `op.Msg.Text` (or `op.Msg.List` with `MsgList`)                                   |
+| `WaitCode(ctx, tzid, WaitCodeOptions{Interval, MaxAttempts, NotEnd})`, `DefaultWaitCodeOptions()` | `WaitCode(ctx, tzid, WaitCodeOptions{Interval, Timeout, KeepOpen, Since})`; zero = 5 s / 600 s |
+| `ErrNoOperations`                                                                                 | `State` returns an empty slice; `StateOne` returns `*APIError` `ERROR_NO_OPERATIONS`           |
+| `TariffCountryOne`, `TariffService`                                                               | `CountryStat`, `ServiceStat`                                                                   |
+| `Rent().Get(ctx, GetRentParams{Country, Days, Extension: BoolPtr(false)})`                        | `Rent().Get(ctx, country, days, extension)`                                                    |
+| `Rent().Extend(ctx, tzid, 0)` (defaulted to 1)                                                    | `Rent().Extend(ctx, tzid, days)`; pass the days                                                |
+| `RentItem.Sum`, `Extend`, `DayExtend` as `any`                                                    | `float64`, `map[string]float64`, `float64`                                                     |
+| `User().Profile` → `User`                                                                         | → `Profile`                                                                                    |
+| `User().PaymentHistory(ctx)` → `PayList`                                                          | `User().PaymentHistory(ctx, page)` → `PaymentHistory`                                          |
+| `User().SetWebhookURL(ctx, &url)` / `(ctx, nil)`                                                  | `SetWebhookURL(ctx, url)` / `ClearWebhookURL(ctx)` (sends `null`)                              |
+| `User().WebhookLogs(ctx, int64)` → `WebhookLogsPage`                                              | `WebhookLogs(ctx, int)` → `Paginator[WebhookLog]`                                              |
+| `Free().FreeList(ctx)`                                                                            | `Free().List(ctx, FreeListOptions{})`                                                          |
+| `ParseWebhookJSON(b)`                                                                             | `ParseWebhook(b)`; no `{"data":…}` wrapper, missing fields are zero values, not errors         |
+| `NoNumberError{Code}`                                                                             | `*NoNumberError` embeds `APIError`; `errors.As` matches both                                   |
+| HTTP errors as plain `error`                                                                      | `*TransportError` with `Status`, `Body`, `Err`                                                 |
+| `WithOAuth`, `WithUserAgent`, `WithRateLimit`                                                     | removed (Bearer key; wrap the transport for throttling)                                        |
+| `WithDevID`, `WithLang`, `WithBaseURL`, `WithHTTPClient`, `WithTimeout`                           | same; the timeout now applies per request, also to an injected client                          |
+| `DefaultCountry`, country `0` → default                                                           | removed: pass the country (`7`, `44`, …)                                                       |
+| `RequestErrorMessage`, `ErrorFromAPICode`, `APIError.Temporary`                                   | removed; `APIError.Message` carries the text                                                   |
+| `mock.SmsScript.Price` (string)                                                                   | `float64`; `mock.APIKey`; `BaseURL()` ends with `/api/`                                        |
+
+
+# Free numbers
+
+## List
+
+Countries, the numbers of the selected country and the SMS of the selected number, in one call.
+
+```go
+func (f *FreeAPI) List(ctx context.Context, opts FreeListOptions) (FreeList, error)
+```
+
+| `FreeListOptions` field | Type     | Zero value     | Description                                                     |
+| ----------------------- | -------- | -------------- | --------------------------------------------------------------- |
+| `Country`               | `int`    | server: `44`   | Country code; an unknown one falls back to the first available. |
+| `Number`                | `string` | first number   | Number **without** the country code, as the keys of `Numbers`.  |
+| `Page`                  | `int`    | `1`            | Page of `Messages`.                                             |
+| `Count`                 | `int`    | server default | SMS per page, 10–500.                                           |
+
+Zero fields are not sent.
+
+`FreeList`:
+
+- `Countries`: `[]FreeCountry{Country, CountryText, CountryOriginal}`
+- `Numbers`: `map[string]FreeNumber{Country, CountryOriginal, FullNumber, DataHumans, IsArchive}`, keyed by the short number
+- `Messages`: a `Paginator[FreeMessage]` (`{ID, Text, InNumber, MyNumber, Code, CreatedAt, DataHumans}`) plus `Number` and `Country`; `Code` is `-` when no code was found
+
+```go
+free := client.Free()
+list, err := free.List(ctx, onlinesim.FreeListOptions{Country: 44})
+if err != nil {
+    return err
+}
+for short := range list.Numbers {
+    page, err := free.List(ctx, onlinesim.FreeListOptions{Country: 44, Number: short, Count: 20})
+    if err != nil {
+        return err
+    }
+    for _, sms := range page.Messages.Data {
+        fmt.Println(sms.InNumber, sms.Code, sms.Text)
+    }
+    break
+}
+```
+
+
+# Numbers
+
+An operation (`tzid`) is one ordered number. Order it with `Get`/`GetWithNumber`, read the SMS with `StateOne` or `WaitCode`, finish it with `Close` (or `Ban`). Countries are phone codes (`7`, `44`, …), services are slugs (`google`, `vkcom`, …) as returned by `Tariffs`.
+
+## Price
+
+Price of one number, USD; `nil` when the country has no price for the service.
+
+```go
+func (n *NumbersAPI) Price(ctx context.Context, service string, country int) (*float64, error)
+```
+
+| Param     | Type     | Description   |
+| --------- | -------- | ------------- |
+| `service` | `string` | Service slug. |
+| `country` | `int`    | Country code. |
+
+```go
+usd, err := client.Numbers().Price(ctx, "google", 44)
+if err == nil && usd != nil {
+    fmt.Println(*usd)
+}
+```
+
+Errors: `*APIError` `ERROR_NO_SERVICE`, `UNDEFINED_COUNTRY`.
+
+## Get
+
+Order a number; returns the operation id. Freezes the price on the balance.
+
+```go
+func (n *NumbersAPI) Get(ctx context.Context, service string, country int, reject ...string) (int64, error)
+```
+
+| Param     | Type        | Description                                                       |
+| --------- | ----------- | ----------------------------------------------------------------- |
+| `service` | `string`    | Service slug.                                                     |
+| `country` | `int`       | Country code.                                                     |
+| `reject`  | `...string` | Number prefixes to skip, e.g. `"4470"`. None: the profile's list. |
+
+```go
+tzid, err := client.Numbers().Get(ctx, "google", 44, "4470")
+fmt.Println(tzid, err)
+```
+
+Errors: `*NoNumberError`; `*APIError` `WARNING_LOW_BALANCE`, `ERROR_NO_SERVICE`, `UNDEFINED_COUNTRY`, `EXCEEDED_CONCURRENT_OPERATIONS`, `INTERVAL_CONCURRENT_REQUESTS_ERROR`, `TRY_AGAIN_LATER`.
+
+## GetWithNumber
+
+Same as `Get`, but returns the number right away.
+
+```go
+func (n *NumbersAPI) GetWithNumber(ctx context.Context, service string, country int, reject ...string) (NumberOrder, error)
+```
+
+Returns `NumberOrder`: `{Tzid, Number, Country, Time, Service, Title, GuardIntervalRemainingSeconds}` — `Number` with `+`, `Time` in seconds left.
+
+```go
+order, err := client.Numbers().GetWithNumber(ctx, "google", 44)
+fmt.Println(order.Tzid, order.Number, err)
+```
+
+Errors: as `Get`.
+
+## State
+
+All operations of the account; an empty slice when there are none.
+
+```go
+func (n *NumbersAPI) State(ctx context.Context, opts StateOptions) ([]Operation, error)
+```
+
+| `StateOptions` field | Type    | Zero value | Description                                          |
+| -------------------- | ------- | ---------- | ---------------------------------------------------- |
+| `FullMessage`        | `bool`  | `false`    | `Msg.Text` is the full SMS text instead of the code. |
+| `OrderBy`            | `Order` | `OrderAsc` | `OrderAsc` or `OrderDesc`.                           |
+| `MsgList`            | `bool`  | `false`    | `Msg.List` holds every SMS (`[]OperationSMS`).       |
+
+`Operation`: `{Tzid, Response, Number, Service, Country, Sum, Time, Form, Msg, GuardIntervalRemainingSeconds, …}`.
+`Response` is the state: `TZInPool` (number being assigned), `TZNumWait` (waiting for SMS), `TZNumAnswer` (SMS arrived), `TZOverOK` (finished), `TZErrorNoItems` (failed). `Msg` is empty until the first SMS. The server caches answers for a few seconds.
+
+```go
+ops, err := client.Numbers().State(ctx, onlinesim.StateOptions{OrderBy: onlinesim.OrderDesc})
+if err != nil {
+    return err
+}
+for _, op := range ops {
+    fmt.Println(op.Tzid, op.Response, op.Msg.Text)
+}
+```
+
+## StateOne
+
+One operation. `OrderBy` is ignored.
+
+```go
+func (n *NumbersAPI) StateOne(ctx context.Context, tzid int64, opts StateOptions) (Operation, error)
+```
+
+```go
+op, err := client.Numbers().StateOne(ctx, tzid, onlinesim.StateOptions{})
+if err == nil && op.Response == onlinesim.TZNumAnswer {
+    fmt.Println(op.Msg.Text)
+}
+```
+
+Errors: `*APIError` `ERROR_NO_OPERATIONS` when the operation does not exist (any more).
+
+## WaitCode
+
+Poll the operation until a code arrives, then close it and return the code.
+
+```go
+func (n *NumbersAPI) WaitCode(ctx context.Context, tzid int64, opts WaitCodeOptions) (string, error)
+```
+
+| `WaitCodeOptions` field | Type                 | Zero value | Description                                                          |
+| ----------------------- | -------------------- | ---------- | -------------------------------------------------------------------- |
+| `Interval`              | `time.Duration`      | 5 s        | Poll interval.                                                       |
+| `Timeout`               | `time.Duration`      | 600 s      | Give up after this long.                                             |
+| `KeepOpen`              | `bool`               | `false`    | Call `Next(tzid)` instead of `Close(tzid)`, to wait for another SMS. |
+| `FullMessage`           | `bool`               | `false`    | Return the full SMS text instead of the code.                        |
+| `Since`                 | `string`             | `""`       | Ignore this value (the previous code).                               |
+| `Sleep`                 | `func(ctx, d) error` | real timer | Injectable for tests.                                                |
+| `Now`                   | `func() time.Time`   | `time.Now` | Injectable for tests.                                                |
+
+Transient errors are retried until the timeout: `*TransportError`, and `*APIError` `TRY_AGAIN_LATER` (the HTTP 429 rate limit), `ERROR_UNDEFINED` and `INTERVAL_CONCURRENT_REQUESTS_ERROR`. Any other `*APIError` is returned at once, and so is the context's error.
+
+```go
+n := client.Numbers()
+first, err := n.WaitCode(ctx, tzid, onlinesim.WaitCodeOptions{KeepOpen: true})
+if err != nil {
+    return err
+}
+second, err := n.WaitCode(ctx, tzid, onlinesim.WaitCodeOptions{Since: first})
+fmt.Println(first, second, err)
+```
+
+Errors: `ErrTimeout` (wrapped); `*APIError` with code `TZ_OVER_OK` or `ERROR_NO_ITEMS` when the operation ended without a new code; any other `*APIError` from `StateOne`/`Close`/`Next`.
+
+## Next
+
+Switch the operation to its next SMS and keep it open (for services that send several SMS).
+
+```go
+func (n *NumbersAPI) Next(ctx context.Context, tzid int64) error
+```
+
+```go
+err := client.Numbers().Next(ctx, tzid)
+fmt.Println(err)
+```
+
+Errors: `*APIError` `ERROR_WRONG_TZID` (not an operation of your account), `ERROR_NO_TZID`.
+
+## Close
+
+Finish the operation. An operation without SMS can be closed only after its guard interval (`GuardIntervalRemainingSeconds`); every attempt locks the tzid for 5 s. The client does not retry.
+
+```go
+func (n *NumbersAPI) Close(ctx context.Context, tzid int64) error
+```
+
+```go
+err := client.Numbers().Close(ctx, tzid)
+fmt.Println(err)
+```
+
+Errors: `*APIError` `NO_COMPLETE_TZID`, `INTERVAL_CONCURRENT_REQUESTS_ERROR`, `ERROR_WRONG_TZID`.
+
+## Ban
+
+Finish the operation and report the number as bad. Only before any SMS arrived.
+
+```go
+func (n *NumbersAPI) Ban(ctx context.Context, tzid int64) error
+```
+
+```go
+err := client.Numbers().Ban(ctx, tzid)
+fmt.Println(err)
+```
+
+Errors: as `Close`; `*APIError` with code `"0"` when the operation already has an SMS — nothing is changed then.
+
+## Tariffs
+
+Services, prices and stock of every country, keyed by country code. No API key needed. The answer is large (a few MB); prefer `TariffsOne`.
+
+```go
+func (n *NumbersAPI) Tariffs(ctx context.Context) (map[string]CountryStat, error)
+```
+
+`CountryStat`: `{Name, LocaleName, Position, Code, Other, New, Enabled, Services}`; `Services` maps `service_<slug>` to `ServiceStat{Count, Popular, Code, Price, ID, Service, Slug}` (`Count` is `-1` when the server reports `"?"`).
+
+```go
+all, err := client.Numbers().Tariffs(ctx)
+fmt.Println(len(all), "countries", err)
+```
+
+## TariffsOne
+
+Services, prices and stock of one country.
+
+```go
+func (n *NumbersAPI) TariffsOne(ctx context.Context, country int) (CountryStat, error)
+```
+
+```go
+uk, err := client.Numbers().TariffsOne(ctx, 44)
+if err != nil {
+    return err
+}
+for _, s := range uk.Services {
+    fmt.Println(s.Slug, s.Price, s.Count)
+}
+```
+
+Errors: `*APIError` `NO_COUNTRY`.
+
+
+# Rent
+
+A rent keeps a number for `days` days. Its SMS come in `RentItem.Messages`, newest first.
+
+`RentItem`: `{Tzid, Status, Number, Country, Sum, Days, Hours, Time, TimeSeconds, Extension, Extend, Messages, StartTime, StopTime, DayExtend, …}` —
+`Sum` is the cost of the rent incl. extensions in USD (a `float64`; the server sends a number from `Get`/`Extend` and a decimal string from `State`),
+reserved (in `Zbalance`) while `Status` is `0` and charged once confirmed, `Time` minutes left, `TimeSeconds` seconds left,
+`Extension` `0` not extendable / `1` extendable / `2` auto-extension, `Extend` maps days to the extension price (empty when not extendable),
+`Messages` is `[]RentSMS`: `{ID, Service, Text, Code, CreatedAt}`. `Code` is `""` without a code; an SMS from `Service` `"notify"`
+(a notice about a prohibited sender) comes with the integer `0`, which the SDK turns into `"0"`, and confirms nothing.
+
+## Get
+
+Rent a number. The price is reserved (frozen in `Zbalance`), not charged: the rent starts with `Status` `0`, `Checked` `false`
+and waits up to 20 minutes for its first SMS. The first SMS that is not `notify` confirms it (`Status` `1`) and charges the price.
+
+```go
+func (r *RentAPI) Get(ctx context.Context, country, days int, extension bool) (RentItem, error)
+```
+
+| Param       | Type   | Description                                                                                      |
+| ----------- | ------ | ------------------------------------------------------------------------------------------------ |
+| `country`   | `int`  | Country code.                                                                                    |
+| `days`      | `int`  | One of the tariff's `Days` keys.                                                                 |
+| `extension` | `bool` | `true` is the usual choice (the server default); `false` makes the rent non-extendable for good. |
+
+```go
+rent, err := client.Rent().Get(ctx, 7, 7, true)
+fmt.Println(rent.Tzid, rent.Number, rent.Sum, err)
+```
+
+Errors: `*NoNumberError`; `*APIError` `UNDEFINED_DAYS`, `UNDEFINED_COUNTRY`, `WARNING_LOW_BALANCE`, `INTERVAL_CONCURRENT_REQUESTS_ERROR`, `TRY_AGAIN_LATER`.
+
+## State
+
+All rents of the account.
+
+```go
+func (r *RentAPI) State(ctx context.Context) ([]RentItem, error)
+```
+
+```go
+rents, err := client.Rent().State(ctx)
+if err != nil {
+    return err
+}
+for _, rent := range rents {
+    if len(rent.Messages) > 0 {
+        fmt.Println(rent.Number, rent.Messages[0].Code)
+    }
+}
+```
+
+## StateOne
+
+One rent.
+
+```go
+func (r *RentAPI) StateOne(ctx context.Context, tzid int64) (RentItem, error)
+```
+
+```go
+rent, err := client.Rent().StateOne(ctx, tzid)
+fmt.Println(len(rent.Messages), err)
+```
+
+Errors: `*APIError` `ERROR_NO_OPERATIONS` for an unknown tzid.
+
+## Extend
+
+Extend a rent by `days` days and charge the balance at once. Only confirmed rents (`Status` `1`) created with `extension` `true`.
+
+```go
+func (r *RentAPI) Extend(ctx context.Context, tzid int64, days int) (RentItem, error)
+```
+
+```go
+rent, err := client.Rent().Extend(ctx, tzid, 3)
+fmt.Println(rent.StopTime, err)
+```
+
+Errors: `*APIError` `TRY_AGAIN_LATER` for every refusal (unknown tzid, rent not confirmed yet, not extendable, unknown period, a repeat within 10 s), `WARNING_LOW_BALANCE`.
+
+## Close
+
+Return the number before the period ends. A confirmed rent closes without a refund. A rent that is not confirmed yet (`Status` `0`) and has no SMS
+can be closed only after 120 s; then, with no SMS or only `notify` ones, the reservation is released. US numbers cannot be closed early.
+
+```go
+func (r *RentAPI) Close(ctx context.Context, tzid int64) error
+```
+
+```go
+err := client.Rent().Close(ctx, tzid)
+fmt.Println(err)
+```
+
+Errors: `*APIError` `ERROR_NO_OPERATIONS` (unknown tzid), `NO_COMPLETE_TZID`, `NO_CLOSE_RENT_US`, `TRY_AGAIN_LATER`.
+
+## Tariffs
+
+Rent prices of every country, keyed by country code. No API key needed.
+
+```go
+func (r *RentAPI) Tariffs(ctx context.Context) (map[string]RentTariff, error)
+```
+
+`RentTariff`: `{Code, Name, Enabled, New, Position, Extend, Confirm, Days, Count, ExtCounts}` — `Days` maps rent days to the price in USD, `Count` to the numbers available.
+
+```go
+tariffs, err := client.Rent().Tariffs(ctx)
+fmt.Println(len(tariffs), err)
+```
+
+## TariffsOne
+
+Rent prices of one country.
+
+```go
+func (r *RentAPI) TariffsOne(ctx context.Context, country int) (RentTariff, error)
+```
+
+```go
+t, err := client.Rent().TariffsOne(ctx, 7)
+fmt.Println(t.Days["7"], err) // price of 7 days
+```
+
+Errors: `*APIError` `NO_COUNTRY` for a country without rent.
+
+
+# Testing
+
+Package `github.com/s00d/onlinesim-go-api/v3/mock` is a fake of the OnlineSim API that ships with the module. `mock.Mock` is an `http.RoundTripper` that answers like the real backend — same shapes, same error codes, HTTP 456 for a wrong key, HTTP 200 `ERROR_WRONG_KEY` for none — and keeps a balance, operations and rents. Your code talks to a normal `*onlinesim.Client`, so nothing in it changes for tests. It is deterministic: no randomness, no clock, numbers and ids come from a counter. Standard library only; it is not linked into your binary unless you import it.
+
+## Setup
+
+```go
+m := mock.New(mock.WithBalance(10))
+client := m.Client() // a *onlinesim.Client wired to the mock, in-process
+
+b, err := client.User().Balance(ctx)
+fmt.Println(b.Balance, err) // 10 <nil>
+```
+
+```go
+func New(opts ...Option) *Mock
+
+func WithAPIKey(key string) Option              // default "mock-key" (mock.DefaultAPIKey)
+func WithBalance(usd float64) Option            // default 100
+func WithPrices(p Prices) Option                // country → service → USD
+func WithRentTariffs(t map[int]RentTariff) Option
+func WithGuardInterval(seconds int) Option      // default 0
+```
+
+| Option              | Default                                                                         | Description                                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `WithAPIKey`        | `"mock-key"`                                                                    | Key the mock accepts. `m.Client()` uses it.                                                                     |
+| `WithBalance`       | `100`                                                                           | Starting balance, USD.                                                                                          |
+| `WithPrices`        | `{7: {vkcom: 0.5, telegram: 1.2, google: 0.3}, 44: {google: 0.2, vkcom: 0.36}}` | Number prices; replaces the defaults. Also feeds `Numbers().Tariffs`.                                           |
+| `WithRentTariffs`   | `{7: {Days: {1: 1, 3: 2.5, 7: 5}, Extend: 1}}`                                  | Rent prices; `Extend: 0` makes rents of that country non-extendable.                                            |
+| `WithGuardInterval` | `0`                                                                             | `> 0`: an operation without SMS, or an unconfirmed rent without any SMS, cannot be closed (`NO_COMPLETE_TZID`). |
+
+`m.Client(opts...)` takes the usual [client options](https://s00d.github.io/onlinesim-go-api/#client-options) (`WithLang`, `WithTimeout`, …). To build the client yourself — for example to test a wrong key — pass the mock as the transport; any base URL works:
+
+```go
+m := mock.New()
+client := onlinesim.New("wrong-key", onlinesim.WithHTTPClient(&http.Client{Transport: m}))
+_, err := client.User().Balance(ctx) // *APIError ERROR_WRONG_KEY
+fmt.Println(err)
+```
+
+Code that needs a real URL (another process, a client you cannot inject an `http.Client` into) can serve the same mock on `127.0.0.1`. `mock.Start` takes the same options and every helper below works on the returned `*mock.Server`:
+
+```go
+srv := mock.Start()
+defer srv.Close()
+client := onlinesim.New(mock.DefaultAPIKey, onlinesim.WithBaseURL(srv.BaseURL())) // or srv.Client()
+fmt.Println(client.User().Balance(ctx))
+```
+
+## A full example
+
+Order a number, let an SMS arrive while `WaitCode` polls, check the code and the money. `AddSMSAfter` delivers the SMS after a number of polls instead of after some time, so `WaitCode` runs with a no-op `Sleep` and the test takes milliseconds.
+
+```go
+// receive_test.go
+package myapp
+
+import (
+    "context"
+    "testing"
+    "time"
+
+    onlinesim "github.com/s00d/onlinesim-go-api/v3"
+    "github.com/s00d/onlinesim-go-api/v3/mock"
+)
+
+func noSleep(context.Context, time.Duration) error { return nil }
+
+func TestReceivesTheCode(t *testing.T) {
+    ctx := context.Background()
+    m := mock.New(mock.WithBalance(10))
+    client := m.Client()
+
+    order, err := client.Numbers().GetWithNumber(ctx, "google", 44)
+    if err != nil {
+        t.Fatal(err)
+    }
+    if order.Number != "+44900000001" {
+        t.Fatalf("number %s", order.Number)
+    }
+
+    if err := m.AddSMSAfter(order.Tzid, "Your Google code: 123-456", 2); err != nil { // the third poll sees it
+        t.Fatal(err)
+    }
+    code, err := client.Numbers().WaitCode(ctx, order.Tzid, onlinesim.WaitCodeOptions{Sleep: noSleep})
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    if code != "123456" {
+        t.Fatalf("code %q", code)
+    }
+    if m.Operations()[0].Status != onlinesim.TZOverOK { // WaitCode closed it
+        t.Fatal("operation still open")
+    }
+    if m.Balance() != 9.8 { // the price is spent once an SMS arrived
+        t.Fatalf("balance %v", m.Balance())
+    }
+}
+```
+
+The `msg` of an operation is the code by default: the first run of 4–8 digits, with spaces and dashes between digits removed (`123-456` → `123456`); a text without such a run comes back whole. `StateOptions{FullMessage: true}` (or `FullMessage` in `WaitCodeOptions`) gives the full text.
+
+## Errors
+
+`FailNext(code)` makes the next request answer `{"response": code}` — the client turns it into `*APIError` (or `*NoNumberError`) exactly as for the real server. `mock.OnEndpoint(path)` fails only that endpoint. `FailNextTransport()` makes the next request fail with a non-JSON HTTP 502 (`*TransportError`); `mock.WithStatus(n)` sets another status.
+
+```go
+// errors_test.go
+package myapp
+
+import (
+    "context"
+    "errors"
+    "testing"
+
+    onlinesim "github.com/s00d/onlinesim-go-api/v3"
+    "github.com/s00d/onlinesim-go-api/v3/mock"
+)
+
+func TestMissingNumberAndNetworkHiccup(t *testing.T) {
+    ctx := context.Background()
+    m := mock.New()
+    client := m.Client()
+
+    m.FailNext("NO_NUMBER", mock.OnEndpoint("getNum.php"))
+    _, err := client.Numbers().Get(ctx, "google", 7)
+    var noNumber *onlinesim.NoNumberError
+    if !errors.As(err, &noNumber) {
+        t.Fatalf("want NoNumberError, got %v", err)
+    }
+
+    m.FailNextTransport(mock.WithStatus(503))
+    _, err = client.User().Balance(ctx)
+    var transport *onlinesim.TransportError
+    if !errors.As(err, &transport) {
+        t.Fatalf("want TransportError, got %v", err)
+    }
+
+    if _, err := client.User().Balance(ctx); err != nil { // one-shot
+        t.Fatal(err)
+    }
+}
+```
+
+The state itself produces the real error codes too: `WARNING_LOW_BALANCE` when the balance is short, `NO_NUMBER` when `reject` matches the next number, `UNDEFINED_COUNTRY` / `ERROR_NO_SERVICE` for unknown prices, `ERROR_WRONG_TZID` for an unknown or closed operation (`Next` too; `ERROR_NO_TZID` for tzid `0`), `UNDEFINED_COUNTRY` / `UNDEFINED_DAYS` for an unknown rent country or period, `TRY_AGAIN_LATER` for every refused `Rent().Extend`, `ERROR_NO_OPERATIONS` for an unknown rent in `Rent().Close`, `ERROR_WRONG_KEY` for a wrong key (HTTP 456) or no key (HTTP 200).
+
+## Inspecting requests
+
+`m.Requests()` lists every request received: `mock.Request{Method, Path, Query, Body}`, `Path` relative to `/api/`, `Body` the decoded JSON of a POST.
+
+```go
+// requests_test.go
+package myapp
+
+import (
+    "context"
+    "reflect"
+    "testing"
+
+    "github.com/s00d/onlinesim-go-api/v3/mock"
+)
+
+func TestSendsRejectAsACommaList(t *testing.T) {
+    m := mock.New()
+    if _, err := m.Client().Numbers().Get(context.Background(), "google", 44, "4470", "4471"); err != nil {
+        t.Fatal(err)
+    }
+
+    want := []mock.Request{{
+        Method: "GET",
+        Path:   "getNum.php",
+        Query:  map[string]string{"service": "google", "country": "44", "reject": "4470,4471", "lang": "en"},
+    }}
+    if got := m.Requests(); !reflect.DeepEqual(got, want) {
+        t.Fatalf("%+v", got)
+    }
+}
+```
+
+## Control API
+
+| Member                                          | Description                                                                                                                                         |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Client(opts...)`                               | A normal `*onlinesim.Client` wired to the mock.                                                                                                     |
+| `RoundTrip(req)`                                | The mock as an `http.RoundTripper`: `&http.Client{Transport: m}`.                                                                                   |
+| `AddSMS(tzid, text, opts...) error`             | An SMS arrives now at a number operation or a rent (detected by `tzid`). `mock.FromService(s)` sets the sender. Fails for an unknown or closed one. |
+| `AddSMSAfter(tzid, text, polls, opts...) error` | The SMS arrives after `polls` state requests for `tzid` (`Numbers().State`/`StateOne`, `Rent().State`/`StateOne`).                                  |
+| `FailNext(code, opts...)`                       | The next request (to `mock.OnEndpoint(path)` only, e.g. `"getNum.php"`) answers `{"response": code}`.                                               |
+| `FailNextTransport(opts...)`                    | The next request fails with a non-JSON body and HTTP 502 (`mock.WithStatus(n)` for another).                                                        |
+| `SetBalance(usd)` / `Balance()`                 | Set / read the total balance, USD (it includes the part frozen by open operations and unconfirmed rents, as `User().Balance` reports it).           |
+| `Operations()` / `Rents()`                      | Copies of the current number operations / open rents, for assertions.                                                                               |
+| `Requests()`                                    | Log of the requests received.                                                                                                                       |
+| `Reset()`                                       | Back to the initial state.                                                                                                                          |
+| `mock.Start(opts...)`                           | The same mock on a local HTTP listener: `BaseURL()`, `Client()`, `Close()`.                                                                         |
+
+A `Mock` is safe for concurrent use.
+
+## What the mock does
+
+- **Numbers**: `Get` freezes the price; `Close` after an SMS spends it, `Close` without one refunds it; `Ban` after an SMS answers `"0"`, like the server. Numbers are `+<country>9000000NN`, ids count from 1. `Next` switches to the following SMS. The operation's `time` stays at 1200 s — there is no clock.
+- **Rent**: `Get` reserves the price (`Status` `0`, `Checked` `false`) and keeps the `extension` flag; the first SMS that is not `notify` confirms the rent (`Status` `1`) and charges it — `AddSMS(tzid, text, mock.FromService("notify"))` adds a notice with `code` `0` that confirms nothing. `Extend` works on a confirmed rent and charges at once. `Close` releases the reservation of an unconfirmed rent and gives no refund for a confirmed one. `sum` is a number in `Get`/`Extend` and a decimal string on the wire of `State`, like the server. SMS appear in `Messages`, newest first.
+- **User**: `Balance` (frozen part included), a fixed profile, `SetWebhookURL` accepts any `scheme://…` URL (`VALIDATION_ERROR` otherwise), `WebhookLogs` lists the deliveries the mock *recorded* when an SMS arrived while a webhook URL was set — it makes no HTTP call; their `params` follow the real payload (`code` `""` without a code, rent `number` in digits without `+`, rent `time_left` in minutes). `PaymentHistory` has no orders.
+- **Free**: `Free().List` returns two fixed countries (44 first) with one number and a few SMS each.
+- Not imitated: anything that needs real time — the 5 s lock after `setOperationOk` (`INTERVAL_CONCURRENT_REQUESTS_ERROR`), the 10 s lock of `Rent().Extend`, the 120 s before an unconfirmed rent may be closed and its 20-minute wait for the first SMS. `WithGuardInterval(n > 0)` stands in for "too early to close".
+
+
+# User
+
+## Balance
+
+Balance in USD.
+
+```go
+func (u *UserAPI) Balance(ctx context.Context) (Balance, error)
+```
+
+`Balance`: `{Balance, Zbalance float64; Income *float64}`. `Balance` includes the sum frozen by numbers and rents in progress (`Zbalance`, may be negative): available = `Balance − max(Zbalance, 0)`. `Income` is the partner income, `nil` when the server sends none. The server caches the answer for 60 s.
+
+```go
+b, err := client.User().Balance(ctx)
+if err != nil {
+    return err
+}
+available := b.Balance - max(b.Zbalance, 0)
+fmt.Println(available)
+```
+
+Errors: `*APIError` `ERROR_WRONG_KEY`, `ACCOUNT_BLOCKED`, `API_ACCESS_DISABLED`, `API_ACCESS_IP`.
+
+## Profile
+
+The account profile.
+
+```go
+func (u *UserAPI) Profile(ctx context.Context) (Profile, error)
+```
+
+`Profile`: `{ID, Name, Username, Email, Locale, Currency, Number, Country, NumberCountry, NumberReject, WebhookURL, APIAccess, …}`. `Number` is the account phone (`int64`, `0` when not set), `Country` a string (`""` when not set). `APIAccess` and `NumberReject` take several shapes and stay `json.RawMessage`.
+
+```go
+p, err := client.User().Profile(ctx)
+fmt.Println(p.Email, p.WebhookURL, err)
+```
+
+## PaymentHistory
+
+Top-up orders (paginated, newest first) and the available payment methods.
+
+```go
+func (u *UserAPI) PaymentHistory(ctx context.Context, page int) (PaymentHistory, error)
+```
+
+`PaymentHistory`: `{Orders Paginator[PaymentOrder]; Paylist; Domains; Forms; Currency; Buttons}`. `PaymentOrder.Sum` stays a decimal string (`"89.00"`); `Currency` and `FormText` are `""` when the server sends `null`. `Paylist` maps the payment group id to its raw JSON; when the server sends it as a JSON array (ids `0, 1, 2…`) it is keyed `"0"`, `"1"`, ….
+
+```go
+h, err := client.User().PaymentHistory(ctx, 1)
+if err != nil {
+    return err
+}
+fmt.Printf("%d orders, page %d/%d\n", h.Orders.Total, h.Orders.CurrentPage, h.Orders.LastPage)
+```
+
+## SetWebhookURL
+
+Set the URL that receives SMS webhooks (see [Webhooks](https://s00d.github.io/onlinesim-go-api/webhooks)).
+
+```go
+func (u *UserAPI) SetWebhookURL(ctx context.Context, webhookURL string) error
+```
+
+```go
+err := client.User().SetWebhookURL(ctx, "https://example.com/onlinesim-hook")
+fmt.Println(err)
+```
+
+Errors: `*APIError` `VALIDATION_ERROR` for an invalid URL; `Message` holds the server's field messages.
+
+## ClearWebhookURL
+
+Remove the webhook URL, also from operations in progress. Sends `webhook_url: null`.
+
+```go
+func (u *UserAPI) ClearWebhookURL(ctx context.Context) error
+```
+
+```go
+err := client.User().ClearWebhookURL(ctx)
+fmt.Println(err)
+```
+
+## WebhookLogs
+
+Webhook delivery log, newest first, 10 per page.
+
+```go
+func (u *UserAPI) WebhookLogs(ctx context.Context, page int) (Paginator[WebhookLog], error)
+```
+
+`WebhookLog`: `{ID, UserID, WebhookURL, Type, Params, Status, Error, CreatedAt, UpdatedAt}` — `Type` is `WebhookReceivingSMS` or `WebhookRentSMS`, `Status` is `success`, `fail` or `pending`, `Params` the payload that was sent (`json.RawMessage`; `ParseWebhook(log.Params)` normalises it).
+
+```go
+logs, err := client.User().WebhookLogs(ctx, 1)
+if err != nil {
+    return err
+}
+for _, l := range logs.Data {
+    fmt.Println(l.CreatedAt, l.Status, l.Error)
+}
+```
+
+
+# Webhooks
+
+Set a URL with [`client.User().SetWebhookURL`](https://s00d.github.io/onlinesim-go-api/user#setwebhookurl). For each SMS the server POSTs a JSON body to it: `webhook_type` `receiving_sms` for numbers, `rent_sms` for rents. Delivery attempts are listed by [`client.User().WebhookLogs`](https://s00d.github.io/onlinesim-go-api/user#webhooklogs).
+
+## ParseWebhook
+
+Parse an inbound webhook body.
+
+```go
+func ParseWebhook(data []byte) (WebhookPayload, error)
+```
+
+Lenient: numeric fields may arrive as strings, missing or malformed fields become zero values (`""`, `0`), unknown fields are ignored. It returns an error only when the input is not a JSON object.
+
+```go
+package main
+
+import (
+    "io"
+    "log"
+    "net/http"
+
+    onlinesim "github.com/s00d/onlinesim-go-api/v3"
+)
+
+func main() {
+    http.HandleFunc("/onlinesim-hook", func(w http.ResponseWriter, r *http.Request) {
+        body, err := io.ReadAll(r.Body)
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusBadRequest)
+            return
+        }
+        hook, err := onlinesim.ParseWebhook(body)
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusBadRequest)
+            return
+        }
+        if hook.WebhookType == onlinesim.WebhookReceivingSMS {
+            log.Println(hook.OperationID, hook.Code)
+        }
+        _, _ = io.WriteString(w, "ok")
+    })
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}
+```
+
+## Payload fields
+
+| Field         | JSON           | Type          | Description                                                                                                                  |
+| ------------- | -------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `WebhookType` | `webhook_type` | `WebhookType` | `WebhookReceivingSMS`, `WebhookRentSMS`, or `""` for anything else.                                                          |
+| `OperationID` | `operation_id` | `int64`       | `tzid` of the operation or rent.                                                                                             |
+| `UserID`      | `user_id`      | `int64`       | Account id.                                                                                                                  |
+| `CountryCode` | `country_code` | `int`         | Country code of the number.                                                                                                  |
+| `Number`      | `number`       | `string`      | Numbers: `+` and the full number (`+79001234567`), or `hidden`. Rent: the full number in digits without `+` (`79001234567`). |
+| `Sender`      | `sender`       | `string`      | Sender of the SMS, e.g. `VK`.                                                                                                |
+| `Message`     | `message`      | `string`      | Full SMS text.                                                                                                               |
+| `Code`        | `code`         | `string`      | Code extracted from the SMS; `""` when none was found.                                                                       |
+| `TimeStart`   | `time_start`   | `string`      | Numbers: when the operation was ordered. Rent: when the SMS arrived. `YYYY-MM-DD HH:MM:SS`.                                  |
+| `TimeLeft`    | `time_left`    | `int64`       | Time left: seconds for numbers, minutes for rent.                                                                            |
